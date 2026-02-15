@@ -1,6 +1,7 @@
 // static/app.js
 // SousSafe behavior (home + dashboard):
-// - Home: recipe search/filter + status polling + contact save/load + dramatic overlay
+// - Home: recipe search/filter + status polling + contacts (max 3) + alert overlay
+// - Home: click SousSafe title to open/close the alert overlay (manual reveal)
 // - Dashboard: hide/show alert panel when clicking the brand title
 
 (function () {
@@ -45,8 +46,17 @@
     return m ? m[1] : ts;
   }
 
+  function escapeHtml(s) {
+    return (s || "")
+      .toString()
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   // ---------------- Dashboard toggle (brand click) ----------------
-  // Works on dashboard.html even though there's no recipeGrid there.
   (function initDashboardToggle() {
     const brandToggle = document.getElementById("brandToggle");
     const alertPanel = document.getElementById("alertPanel");
@@ -69,12 +79,11 @@
       }
     }
 
-    // default: hidden
     setOpen(getOpen());
 
     function toggle() {
       const isHidden = alertPanel.classList.contains("is-hidden");
-      setOpen(isHidden); // if hidden -> open
+      setOpen(isHidden);
     }
 
     brandToggle.addEventListener("click", toggle);
@@ -88,7 +97,7 @@
 
   // ---------------- Home behavior (requires recipeGrid) ----------------
   const grid = document.getElementById("recipeGrid");
-  if (!grid) return; // stop here on non-home pages (dashboard already handled above)
+  if (!grid) return;
 
   // ---------------- Recipe search/filter ----------------
   const cards = Array.from(grid.querySelectorAll(".productcard"));
@@ -124,13 +133,21 @@
   const alertTokenVal = document.getElementById("alertTokenVal");
   const alertContactLine = document.getElementById("alertContactLine");
 
+  // Home brand click
+  const brandToggleHome = document.getElementById("brandToggle");
+
   // ---------------- State ----------------
-  let lastOverlayTokenShown = null; // prevent re-showing overlay every poll
+  let lastOverlayTokenShown = null;
+  let lastCtx = null;
+
   const LS_LAST_TRIGGER = "soussafe:lastTrigger";
   const LS_LAST_OVERLAY_DISMISS = "soussafe:lastOverlayDismissToken";
 
+  // Contacts cache
+  let contactsCache = [];
+  let contactsMax = 3;
+
   function getCardTags(card) {
-    // home.html uses data-tags (plural). keep fallback to data-tag.
     const raw = norm(card.getAttribute("data-tags") || card.getAttribute("data-tag"));
     const parts = raw.split(/\s+/).filter(Boolean);
     return Array.from(new Set(parts));
@@ -213,12 +230,14 @@
     } else if (r >= 5) {
       stage = "Simmer";
       dotClass = "yellow";
-    } else {
-      stage = "Prep";
-      dotClass = "blue";
     }
 
     heatVal.innerHTML = `<span class="dot ${dotClass}"></span> ${stage}`;
+  }
+
+  function isOverlayOpen() {
+    if (!overlay) return false;
+    return overlay.style.display === "grid";
   }
 
   function setOverlayOpen(isOpen) {
@@ -229,6 +248,7 @@
   }
 
   function shouldShowOverlay(ctx) {
+    // auto-open rule (optional)
     if (!overlay) return false;
     if (!ctx || ctx.ok !== true) return false;
     if (!ctx.last_token) return false;
@@ -238,7 +258,6 @@
     if (threshold === null) return false;
 
     if (risk < threshold) return false;
-
     if (lastOverlayTokenShown === ctx.last_token) return false;
 
     const dismissedToken = localStorage.getItem(LS_LAST_OVERLAY_DISMISS);
@@ -247,7 +266,14 @@
     return true;
   }
 
-  function fillOverlay(ctx, contact) {
+  function pickPrimaryContact() {
+    // Prefer email contacts, else first contact
+    if (!contactsCache || contactsCache.length === 0) return null;
+    const email = contactsCache.find((c) => norm(c.method) === "email");
+    return email || contactsCache[0];
+  }
+
+  function fillOverlay(ctx) {
     if (!overlay) return;
 
     const risk = safeNum(ctx.risk);
@@ -268,11 +294,12 @@
     }
 
     if (alertContactLine) {
-      if (contact && contact.value) {
-        const label = contact.name ? contact.name : "Trusted contact";
+      const c = pickPrimaryContact();
+      if (c && c.value) {
+        const label = c.name ? c.name : "Trusted contact";
+        const method = (c.method || "").toString().toUpperCase();
         alertContactLine.style.display = "block";
-        const method = (contact.method || "").toString().toUpperCase();
-        alertContactLine.textContent = `${label}: ${method} ${contact.value}`;
+        alertContactLine.textContent = `${label}: ${method} ${c.value}`;
       } else {
         alertContactLine.style.display = "none";
         alertContactLine.textContent = "";
@@ -280,30 +307,101 @@
     }
   }
 
-  // ------------ Contact save/load ------------
-  async function loadContact() {
+  // ------------ Contacts: load / render / add / delete ------------
+  function ensureContactsListUI() {
+    // Create a small list UI under the contact status line if it doesn't exist.
+    if (!contactForm) return null;
+
+    let list = document.getElementById("contactList");
+    if (!list) {
+      list = document.createElement("div");
+      list.id = "contactList";
+      list.style.marginTop = "10px";
+      // insert after contactStatus
+      const anchor = contactStatus || contactForm;
+      anchor.parentNode.insertBefore(list, anchor.nextSibling);
+    }
+    return list;
+  }
+
+  function setContactInputsDisabled(disabled) {
+    if (contactName) contactName.disabled = disabled;
+    if (contactMethod) contactMethod.disabled = disabled;
+    if (contactValue) contactValue.disabled = disabled;
+    const btn = document.getElementById("contactSaveBtn");
+    if (btn) btn.disabled = disabled;
+  }
+
+  function renderContacts() {
+    const listEl = ensureContactsListUI();
+    if (!listEl) return;
+
+    const n = contactsCache.length;
+    const remaining = Math.max(0, contactsMax - n);
+
+    if (contactStatus) {
+      contactStatus.textContent =
+        n === 0
+          ? `No contacts yet • Add up to ${contactsMax}`
+          : `Saved ${n}/${contactsMax} contact${n === 1 ? "" : "s"} • ${remaining} slot${remaining === 1 ? "" : "s"} left`;
+    }
+
+    // Disable add when max reached
+    setContactInputsDisabled(n >= contactsMax);
+
+    if (n === 0) {
+      listEl.innerHTML = `<div class="subtle">No trusted contacts saved yet.</div>`;
+      return;
+    }
+
+    const items = contactsCache
+      .map((c) => {
+        const id = c.id;
+        const nm = escapeHtml(c.name || "Trusted contact");
+        const method = escapeHtml((c.method || "").toUpperCase());
+        const val = escapeHtml(c.value || "");
+        return `
+          <div class="contactitem" data-id="${id}" style="display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid rgba(255,255,255,.10); border-radius:10px; margin-top:8px;">
+            <div style="min-width:0">
+              <div class="mono" style="font-size:.92rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${nm}</div>
+              <div class="subtle" style="font-size:.86rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${method} ${val}</div>
+            </div>
+            <button class="btn ghost contactRemoveBtn" type="button" data-id="${id}" title="Remove contact">Remove</button>
+          </div>
+        `;
+      })
+      .join("");
+
+    listEl.innerHTML = items;
+
+    // wire remove buttons
+    listEl.querySelectorAll(".contactRemoveBtn").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const id = btn.getAttribute("data-id");
+        if (!id) return;
+        await deleteContact(id);
+      });
+    });
+  }
+
+  async function loadContacts() {
     try {
       const res = await fetch("/api/contact", { cache: "no-store" });
       if (!res.ok) return null;
       const data = await res.json();
       if (!data || data.ok !== true) return null;
 
-      if (contactName) contactName.value = data.name || "";
-      if (contactMethod) contactMethod.value = data.method || "sms";
-      if (contactValue) contactValue.value = data.value || "";
+      contactsCache = Array.isArray(data.contacts) ? data.contacts : [];
+      contactsMax = Number.isFinite(Number(data.max)) ? Number(data.max) : 3;
 
-      if (contactStatus) {
-        contactStatus.textContent = data.value
-          ? `Saved: ${data.name || "Trusted contact"} (${(data.method || "").toUpperCase()} ${data.value})`
-          : "Not set";
-      }
+      renderContacts();
       return data;
     } catch {
       return null;
     }
   }
 
-  async function saveContact(payload) {
+  async function addContact(payload) {
     try {
       const res = await fetch("/api/contact", {
         method: "POST",
@@ -311,16 +409,55 @@
         body: JSON.stringify(payload),
       });
       const data = await res.json().catch(() => null);
+
       if (!res.ok || !data || data.ok !== true) {
-        if (contactStatus) contactStatus.textContent = "Could not save contact (server error).";
+        const msg = (data && data.error) ? data.error : "Could not add contact (server error).";
+        if (contactStatus) contactStatus.textContent = msg;
         return null;
       }
-      if (contactStatus) {
-        contactStatus.textContent = `Saved: ${data.name || "Trusted contact"} (${(data.method || "").toUpperCase()} ${data.value})`;
+
+      // server returns updated contacts
+      contactsCache = Array.isArray(data.contacts) ? data.contacts : contactsCache;
+
+      // SNS note (if email)
+      if (data.sns && payload.method === "email") {
+        if (contactStatus) {
+          contactStatus.textContent = data.sns.ok
+            ? "Email added. Check inbox and confirm SNS subscription."
+            : `Email added, but SNS subscribe failed: ${data.sns.error || "unknown error"}`;
+        }
       }
+
+      // clear inputs for next add
+      if (contactName) contactName.value = "";
+      if (contactValue) contactValue.value = "";
+
+      renderContacts();
       return data;
     } catch {
-      if (contactStatus) contactStatus.textContent = "Could not save contact (network error).";
+      if (contactStatus) contactStatus.textContent = "Could not add contact (network error).";
+      return null;
+    }
+  }
+
+  async function deleteContact(id) {
+    try {
+      const res = await fetch(`/api/contact/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok || !data || data.ok !== true) {
+        const msg = (data && data.error) ? data.error : "Could not remove contact.";
+        if (contactStatus) contactStatus.textContent = msg;
+        return null;
+      }
+
+      contactsCache = Array.isArray(data.contacts) ? data.contacts : [];
+      renderContacts();
+      return data;
+    } catch {
+      if (contactStatus) contactStatus.textContent = "Could not remove contact (network error).";
       return null;
     }
   }
@@ -330,14 +467,14 @@
       e.preventDefault();
       const payload = {
         name: (contactName?.value || "").trim(),
-        method: (contactMethod?.value || "sms").trim(),
+        method: (contactMethod?.value || "email").trim(),
         value: (contactValue?.value || "").trim(),
       };
       if (!payload.value) {
         if (contactStatus) contactStatus.textContent = "Please enter a phone or email.";
         return;
       }
-      await saveContact(payload);
+      await addContact(payload);
     });
   }
 
@@ -360,7 +497,57 @@
       if (e.target === overlay) dismissOverlay();
     });
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && overlay.style.display === "grid") dismissOverlay();
+      if (e.key === "Escape" && isOverlayOpen()) dismissOverlay();
+    });
+  }
+
+  // Manual open/close overlay when clicking SousSafe title
+  async function openOverlayFromBrandClick() {
+    if (!overlay) return;
+
+    if (isOverlayOpen()) {
+      setOverlayOpen(false);
+      return;
+    }
+
+    // Ensure we have contacts for the contact line
+    await loadContacts().catch(() => null);
+
+    // Prefer freshest context
+    let ctx = lastCtx;
+    try {
+      const res = await fetch("/api/context", { cache: "no-store" });
+      if (res.ok) {
+        const fresh = await res.json();
+        if (fresh && fresh.ok === true) ctx = fresh;
+      }
+    } catch {}
+
+    if (!ctx || ctx.ok !== true || !ctx.last_token) {
+      if (alertTokenVal) alertTokenVal.textContent = "—";
+      if (alertRiskVal) alertRiskVal.textContent = "—";
+      if (alertAudioVal) alertAudioVal.textContent = "—";
+      if (alertTempVal) alertTempVal.textContent = "—";
+      if (alertHumVal) alertHumVal.textContent = "—";
+      if (alertDistVal) alertDistVal.textContent = "—";
+      if (alertContactLine) alertContactLine.style.display = "none";
+      if (alertOpenLinkBtn) alertOpenLinkBtn.href = "#";
+      setOverlayOpen(true);
+      return;
+    }
+
+    fillOverlay(ctx);
+    lastOverlayTokenShown = ctx.last_token;
+    setOverlayOpen(true);
+  }
+
+  if (brandToggleHome) {
+    brandToggleHome.addEventListener("click", openOverlayFromBrandClick);
+    brandToggleHome.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        openOverlayFromBrandClick();
+      }
     });
   }
 
@@ -373,7 +560,8 @@
       const ctx = await res.json();
       if (!ctx || ctx.ok !== true) return;
 
-      // If no alerts yet
+      lastCtx = ctx;
+
       if (!ctx.last_token) {
         if (kitchenVal) kitchenVal.textContent = "—";
         if (distanceVal) distanceVal.textContent = "—";
@@ -383,33 +571,31 @@
         return;
       }
 
-      // Kitchen: Temp · Humidity
       if (kitchenVal) kitchenVal.textContent = `${fmtTemp(ctx.temp)} · ${fmtHum(ctx.humidity)}`;
-
-      // Distance + audio (only if backend returns them; otherwise they'll show "—")
       if (distanceVal) distanceVal.textContent = fmtDist(ctx.distance);
       if (audioVal) audioVal.textContent = fmtAudio(ctx.audio);
-
-      // Heat: stage from risk
       setHeatStageFromRisk(ctx.risk);
 
-      // Last link: show token + time
       if (triggerVal) {
         const timePart = fmtTime(ctx.created_at);
         triggerVal.textContent = timePart ? `${ctx.last_token} · ${timePart}` : ctx.last_token;
       }
 
-      // Timer placeholder (until you wire real timer API)
-      if (timerVal && (!timerVal.textContent || !timerVal.textContent.trim())) timerVal.textContent = "15:00";
+      if (timerVal && (!timerVal.textContent || !timerVal.textContent.trim())) {
+        timerVal.textContent = "15:00";
+      }
 
-      // LocalStorage stamp for “last trigger”
       const stamp = new Date().toLocaleString();
       localStorage.setItem(LS_LAST_TRIGGER, `${ctx.last_token} · ${stamp}`);
 
-      // Overlay logic
+      // OPTIONAL: auto-open overlay when risk >= threshold
+      // If you want ONLY manual open via brand click, comment out this block.
       if (shouldShowOverlay(ctx)) {
-        const contact = await loadContact(); // best-effort
-        fillOverlay(ctx, contact);
+        // ensure contacts are loaded (for contact line)
+        if (!contactsCache || contactsCache.length === 0) {
+          await loadContacts().catch(() => null);
+        }
+        fillOverlay(ctx);
         lastOverlayTokenShown = ctx.last_token;
         setOverlayOpen(true);
       }
@@ -427,7 +613,6 @@
     if (cur === "—" || cur === "") triggerVal.textContent = last;
   }
 
-  // If your /r/<token> pages run this JS too, capture token from URL
   function captureTokenFromUrl() {
     const m = window.location.pathname.match(/^\/r\/([A-Za-z0-9_-]+)$/);
     if (!m) return;
@@ -440,7 +625,9 @@
   captureTokenFromUrl();
   hydrateLastTriggerFromLocalStorage();
   applyFilters();
-  loadContact(); // hydrate UI if endpoint exists
+
+  // load contacts on page load so list renders
+  loadContacts();
 
   tryHydrateContext();
   setInterval(tryHydrateContext, 2500);

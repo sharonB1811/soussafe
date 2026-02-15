@@ -4,6 +4,8 @@ import sqlite3
 import secrets
 from datetime import datetime
 import os
+import json
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -13,9 +15,8 @@ app.secret_key = "dev-secret-change-me"
 DB = "soussafe.db"
 
 # ---------------- AWS (SNS) ----------------
-# Recommended:
-#   export SNS_TOPIC_ARN="arn:aws:sns:us-east-1:712192388720:SousSafeAlerts"
-# Optional:
+# Env vars:
+#   export SNS_TOPIC_ARN="arn:aws:sns:us-east-1:123456789012:SousSafeAlerts"
 #   export AWS_REGION="us-east-1"
 #   export ALERT_THRESHOLD="6"
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "PASTE_YOUR_TOPIC_ARN_HERE")
@@ -24,16 +25,14 @@ ALERT_THRESHOLD = int(os.getenv("ALERT_THRESHOLD", "6"))
 
 sns = boto3.client("sns", region_name=AWS_REGION)
 
+MAX_CONTACTS = 3
+
 # ---------------- Image helper ----------------
-# You have a mix of .jpg and .jpeg. This finds the right one so cards render.
 IMAGE_DIR = os.path.join(app.root_path, "static", "images")
 
 
 def image_url(stem: str) -> str:
-    """
-    Return /static/images/<stem>.(jpg|jpeg|png|webp) based on what exists.
-    Falls back to .jpg path if not found (so you notice quickly).
-    """
+    """Return /static/images/<stem>.(jpg|jpeg|png|webp) based on what exists."""
     for ext in ("jpg", "jpeg", "png", "webp"):
         p = os.path.join(IMAGE_DIR, f"{stem}.{ext}")
         if os.path.exists(p):
@@ -50,14 +49,12 @@ def db():
 
 def init_db():
     """
-    Initializes DB tables and performs lightweight schema upgrades.
-    - alerts: stores triggers/sensor snapshots
-    - config: stores trusted contact info (single row: key='trusted_contact')
+    - alerts: sensor snapshots
+    - contacts: up to MAX_CONTACTS trusted contacts
     """
     conn = db()
     cur = conn.cursor()
 
-    # Create alerts table (now includes distance_cm)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,21 +70,21 @@ def init_db():
         )
     """)
 
-    # Lightweight migration for older DBs that don't have distance_cm yet
+    # lightweight migration
     try:
         cols = {r["name"] for r in cur.execute("PRAGMA table_info(alerts)").fetchall()}
         if "distance_cm" not in cols:
             cur.execute("ALTER TABLE alerts ADD COLUMN distance_cm REAL")
     except sqlite3.Error:
-        # If PRAGMA/ALTER fails for some reason, keep going (dev-friendly)
         pass
 
-    # Config table for trusted contact (key/value JSON or plain text)
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS config (
-            key TEXT PRIMARY KEY,
+        CREATE TABLE IF NOT EXISTS contacts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            method TEXT NOT NULL,
             value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
+            created_at TEXT NOT NULL
         )
     """)
 
@@ -95,30 +92,124 @@ def init_db():
     conn.close()
 
 
-def get_config(key: str):
+# ---------------- Contacts helpers ----------------
+def list_contacts():
     conn = db()
-    row = conn.execute("SELECT value FROM config WHERE key = ?", (key,)).fetchone()
+    rows = conn.execute("""
+        SELECT id, name, method, value, created_at
+        FROM contacts
+        ORDER BY id ASC
+    """).fetchall()
     conn.close()
-    return row["value"] if row else None
+    return [dict(r) for r in rows]
 
 
-def set_config(key: str, value: str):
+def count_contacts() -> int:
     conn = db()
+    n = conn.execute("SELECT COUNT(*) AS c FROM contacts").fetchone()["c"]
+    conn.close()
+    return int(n)
+
+
+def contact_exists(method: str, value: str) -> bool:
+    conn = db()
+    row = conn.execute(
+        "SELECT 1 FROM contacts WHERE lower(method)=lower(?) AND lower(value)=lower(?) LIMIT 1",
+        (method, value),
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def add_contact(name: str, method: str, value: str) -> int:
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn.execute("""
-        INSERT INTO config (key, value, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-    """, (key, value, now))
+    conn = db()
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO contacts (name, method, value, created_at) VALUES (?, ?, ?, ?)",
+        (name, method, value, now),
+    )
     conn.commit()
+    new_id = cur.lastrowid
     conn.close()
+    return int(new_id)
+
+
+def get_contact_by_id(contact_id: int):
+    conn = db()
+    row = conn.execute(
+        "SELECT id, name, method, value, created_at FROM contacts WHERE id = ?",
+        (contact_id,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def delete_contact(contact_id: int) -> bool:
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("DELETE FROM contacts WHERE id = ?", (contact_id,))
+    conn.commit()
+    deleted = cur.rowcount > 0
+    conn.close()
+    return deleted
+
+
+# ---------------- SNS helpers ----------------
+def sns_is_configured() -> bool:
+    return bool(SNS_TOPIC_ARN) and SNS_TOPIC_ARN != "PASTE_YOUR_TOPIC_ARN_HERE"
+
+
+def sns_subscribe_email(email: str) -> dict:
+    """
+    Subscribe email endpoint to SNS topic.
+    SNS requires email confirmation in inbox.
+    """
+    if not sns_is_configured():
+        return {"ok": False, "subscription_arn": None, "error": "SNS_TOPIC_ARN not set"}
+
+    try:
+        resp = sns.subscribe(
+            TopicArn=SNS_TOPIC_ARN,
+            Protocol="email",
+            Endpoint=email,
+            ReturnSubscriptionArn=True,
+        )
+        arn = resp.get("SubscriptionArn")  # often "PendingConfirmation"
+        return {"ok": True, "subscription_arn": arn, "error": None}
+    except (BotoCoreError, ClientError) as e:
+        return {"ok": False, "subscription_arn": None, "error": str(e)}
+
+
+def try_publish_sns(payload: dict) -> dict:
+    if not sns_is_configured():
+        return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
+
+    try:
+        resp = sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f"SousSafe alert • risk {payload.get('risk')}",
+            Message=(
+                "SousSafe alert\n"
+                f"Time: {payload.get('created_at')}\n"
+                f"Device: {payload.get('device_id')}\n"
+                f"Trigger: {payload.get('trigger_type')}\n"
+                f"Risk: {payload.get('risk')}\n"
+                f"Audio: {payload.get('audio_level')}\n"
+                f"Temp: {payload.get('temp')}\n"
+                f"Humidity: {payload.get('humidity')}\n"
+                f"Distance(cm): {payload.get('distance_cm')}\n"
+                f"Token: {payload.get('token')}\n"
+                f"Link: {payload.get('public_link')}\n"
+            ),
+        )
+        return {"ok": True, "message_id": resp.get("MessageId"), "error": None}
+    except (BotoCoreError, ClientError) as e:
+        return {"ok": False, "message_id": None, "error": str(e)}
 
 
 # ---------------- Public Recipe Data ----------------
-# TAGS should include filter words your UI expects:
-# quick, stove, oven, dessert, veg, protein
 RECIPES = {
-    # ---- Quick + Stove ----
     "garlicpasta": {
         "title": "Garlic Pasta 🍝",
         "tag": "quick stove",
@@ -147,8 +238,6 @@ RECIPES = {
         "meta": "35 min • 6 steps",
         "steps": ["Sauté aromatics", "Add lentils", "Add broth", "Simmer", "Season", "Serve"],
     },
-
-    # ---- Stove (non-quick) ----
     "cozysoup": {
         "title": "Cozy Soup 🍲",
         "tag": "stove",
@@ -163,8 +252,6 @@ RECIPES = {
         "meta": "30 min • 6 steps",
         "steps": ["Sauté onions", "Add spices", "Add chickpeas", "Add tomatoes", "Simmer", "Serve"],
     },
-
-    # ---- Oven ----
     "bakedsalmon": {
         "title": "Baked Salmon 🐟",
         "tag": "oven protein",
@@ -186,8 +273,6 @@ RECIPES = {
         "meta": "60 min • 7 steps",
         "steps": ["Preheat oven", "Layer sauce", "Add noodles", "Add cheese", "Repeat layers", "Bake", "Rest + serve"],
     },
-
-    # ---- Dessert ----
     "cookies": {
         "title": "Simple Cookies 🍪",
         "tag": "oven dessert",
@@ -218,13 +303,7 @@ def compute_risk(audio_level: int | None,
                  temp: float | None,
                  manual: bool,
                  distance_cm: float | None = None) -> int:
-    """
-    Risk scoring (0..10). Keep this simple and demo-friendly.
-    Now optionally considers distance_cm:
-      - if object is extremely close (< 10cm), add +1 (e.g., hand near hot surface / stove edge)
-    """
     risk = 0
-
     if manual:
         risk += 4
 
@@ -258,38 +337,6 @@ def recipe_for_risk(risk: int) -> str:
     return "garlicpasta"
 
 
-def try_publish_sns(payload: dict) -> dict:
-    if (not SNS_TOPIC_ARN) or SNS_TOPIC_ARN == "PASTE_YOUR_TOPIC_ARN_HERE":
-        return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
-
-    try:
-        # Include trusted contact info in the SNS message if present
-        contact = get_config("trusted_contact")  # stored as JSON string by /api/contact
-        contact_line = f"Trusted contact: {contact}\n" if contact else ""
-
-        resp = sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Subject=f"SousSafe alert • risk {payload.get('risk')}",
-            Message=(
-                "SousSafe hidden alert\n"
-                f"Time: {payload.get('created_at')}\n"
-                f"Device: {payload.get('device_id')}\n"
-                f"Trigger: {payload.get('trigger_type')}\n"
-                f"Risk: {payload.get('risk')}\n"
-                f"Audio: {payload.get('audio_level')}\n"
-                f"Temp: {payload.get('temp')}\n"
-                f"Humidity: {payload.get('humidity')}\n"
-                f"Distance(cm): {payload.get('distance_cm')}\n"
-                f"{contact_line}"
-                f"Token: {payload.get('token')}\n"
-                f"Link: {payload.get('public_link')}\n"
-            ),
-        )
-        return {"ok": True, "message_id": resp.get("MessageId"), "error": None}
-    except (BotoCoreError, ClientError) as e:
-        return {"ok": False, "message_id": None, "error": str(e)}
-
-
 # ---------------- Routes ----------------
 @app.get("/")
 def home():
@@ -311,59 +358,95 @@ def recipe(key):
     return render_template("recipe.html", recipe=RECIPES[key], key=key)
 
 
-# --------- (2) Emergency contact setup ----------
+# --------- Contacts API (max 3) ----------
 @app.get("/api/contact")
-def api_get_contact():
-    """
-    Returns trusted contact info (stored as JSON string).
-    Frontend can render it / prefill inputs.
-    """
-    raw = get_config("trusted_contact")
-    return jsonify({"ok": True, "contact": raw})
+def api_get_contacts():
+    sns_state = {
+        "configured": sns_is_configured(),
+        "topic_arn": SNS_TOPIC_ARN if sns_is_configured() else None,
+        "note": (
+            "SNS email requires confirmation from the inbox."
+            if sns_is_configured()
+            else "Set SNS_TOPIC_ARN to enable SNS."
+        )
+    }
+    return jsonify({
+        "ok": True,
+        "max": MAX_CONTACTS,
+        "contacts": list_contacts(),
+        "sns": sns_state
+    })
 
 
 @app.post("/api/contact")
-def api_set_contact():
-    """
-    Save trusted contact (name + method + value).
-    Body example:
-      {"name":"Marianna","method":"sms","value":"+1-555-123-4567"}
-      {"name":"Mom","method":"email","value":"mom@example.com"}
-    We store it as a JSON-ish string (simple) to avoid new deps.
-    """
+def api_add_contact_route():
     data = request.get_json(force=True) or {}
     name = str(data.get("name", "")).strip()
     method = str(data.get("method", "")).strip().lower()
     value = str(data.get("value", "")).strip()
 
-    if not name or not method or not value:
-        return jsonify({"ok": False, "error": "name, method, value required"}), 400
-
+    if not value:
+        return jsonify({"ok": False, "error": "Please enter a phone or email."}), 400
     if method not in {"sms", "email"}:
         return jsonify({"ok": False, "error": "method must be 'sms' or 'email'"}), 400
+    if count_contacts() >= MAX_CONTACTS:
+        return jsonify({"ok": False, "error": f"Max {MAX_CONTACTS} contacts reached."}), 400
+    if contact_exists(method, value):
+        return jsonify({"ok": False, "error": "That contact already exists."}), 400
 
-    # Store as a string (your JS can JSON.parse if you choose to store JSON later)
-    stored = f'{{"name":"{name}","method":"{method}","value":"{value}"}}'
-    set_config("trusted_contact", stored)
-    return jsonify({"ok": True, "contact": stored})
+    new_id = add_contact(name, method, value)
+
+    sns_result = None
+    if method == "email":
+        sub = sns_subscribe_email(value)
+        sns_result = {
+            "ok": sub["ok"],
+            "action": "subscribe",
+            "subscription_arn": sub.get("subscription_arn"),
+            "error": sub.get("error"),
+            "note": "Check inbox and confirm SNS subscription." if sub["ok"] else "SNS subscribe failed."
+        }
+
+    return jsonify({
+        "ok": True,
+        "id": new_id,
+        "contacts": list_contacts(),
+        "sns": sns_result
+    })
 
 
-# --------- (1) Live sensor dashboard panel ----------
+@app.delete("/api/contact/<int:contact_id>")
+def api_delete_contact_route(contact_id):
+    c = get_contact_by_id(contact_id)
+    if not c:
+        return jsonify({"ok": False, "error": "Contact not found."}), 404
+
+    delete_contact(contact_id)
+
+    # NOTE: We can't reliably unsubscribe without storing SubscriptionArn per contact.
+    sns_result = None
+    if c.get("method") == "email" and sns_is_configured():
+        sns_result = {
+            "ok": True,
+            "action": "deleted",
+            "note": "Removed from app. SNS subscription may still exist unless you store SubscriptionArn per contact."
+        }
+
+    return jsonify({"ok": True, "contacts": list_contacts(), "sns": sns_result})
+
+
+# --------- Live sensor/status panel ----------
 @app.get("/api/context")
 def api_context():
     conn = db()
     row = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()
     conn.close()
 
-    # Include threshold + contact so the UI can do dramatic overlay logic
-    contact_raw = get_config("trusted_contact")
-
     if not row:
         return jsonify({
             "ok": True,
             "last_token": None,
             "threshold": ALERT_THRESHOLD,
-            "contact": contact_raw,
         })
 
     return jsonify({
@@ -373,16 +456,16 @@ def api_context():
         "audio": row["audio_level"],
         "temp": row["temp"],
         "humidity": row["humidity"],
+        "distance": row["distance_cm"],
         "distance_cm": row["distance_cm"],
         "device": row["device_id"],
         "created_at": row["created_at"],
         "public_link": f"/r/{row['token']}",
         "threshold": ALERT_THRESHOLD,
-        "contact": contact_raw,
     })
 
 
-# --------- Trigger endpoint (Arduino/app posts here) ----------
+# --------- Trigger endpoint (device posts here) ----------
 @app.post("/api/trigger")
 def api_trigger():
     data = request.get_json(force=True) or {}
@@ -394,7 +477,7 @@ def api_trigger():
     audio_level = data.get("audio")
     temp = data.get("temp")
     humidity = data.get("humidity")
-    distance_cm = data.get("distance_cm")  # NEW: distance sensor
+    distance_cm = data.get("distance_cm", data.get("distance"))
 
     hour = datetime.now().hour
     after_10pm = (hour >= 22)
@@ -450,7 +533,6 @@ def api_trigger():
             "public_link": public_link,
         })
 
-    # frontend uses threshold to do dramatic overlay
     return jsonify({
         "message": f"{RECIPES[recipe_key]['title']} tip of the day!",
         "link": public_link,
@@ -478,16 +560,21 @@ def dashboard():
     alerts = conn.execute("SELECT * FROM alerts ORDER BY id DESC").fetchall()
     conn.close()
 
-    # Also pass trusted contact to dashboard if you want to show it
-    contact_raw = get_config("trusted_contact")
-    return render_template("dashboard.html", alerts=alerts, trusted_contact=contact_raw, threshold=ALERT_THRESHOLD)
+    return render_template(
+        "dashboard.html",
+        alerts=alerts,
+        trusted_contact=list_contacts(),
+        threshold=ALERT_THRESHOLD
+    )
 
 
 @app.get("/dev/fire")
 def dev_fire():
     return jsonify({
-        "tip": "Use curl to trigger events. Example in terminal:",
-        "curl": """curl -X POST http://127.0.0.1:5050/api/trigger -H "Content-Type: application/json" -d '{"trigger":"automatic","audio":92,"temp":78,"humidity":45,"distance_cm":12,"device":"K01"}'"""
+        "tip": "Use curl to trigger events. Example:",
+        "curl": """curl -X POST http://127.0.0.1:5050/api/trigger \\
+  -H "Content-Type: application/json" \\
+  -d '{"trigger":"automatic","audio":92,"temp":78,"humidity":45,"distance_cm":12,"device":"K01"}'"""
     })
 
 

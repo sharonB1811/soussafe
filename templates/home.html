@@ -9,86 +9,125 @@
 </head>
 
 <body class="wrap">
+
   <!-- Top bar -->
   <header class="topbar">
     <div class="brandblock">
-      <div class="brand">SousSafe</div>
+      <div class="brand clickable"
+           id="brandToggle"
+           role="button"
+           tabindex="0"
+           title="Click to view latest alert">
+        SousSafe
+      </div>
       <div class="tagline">Smart recipe companion</div>
     </div>
 
     <nav class="topnav">
-      <a class="btn ghost" href="/dashboard" title="Judge view">Dashboard</a>
+      <a class="btn ghost" href="/dashboard">Dashboard</a>
     </nav>
   </header>
 
-  <!-- (3) Dramatic overlay (hidden by default; app.js toggles) -->
-  <div id="alertOverlay" class="alertoverlay" aria-hidden="true">
-    <div class="alertmodal" role="dialog" aria-modal="true" aria-labelledby="alertTitle">
-      <div class="alertbadge">
-        <span class="dot red"></span>
-        <span class="mono">SOUSSAFE ALERT</span>
-      </div>
 
-      <h3 id="alertTitle" class="alerttitle">Possible kitchen risk detected</h3>
-      <p class="alertsubtle" id="alertSubtitle">
-        We detected a pattern consistent with danger. If you’re safe, dismiss this.
-      </p>
+  <!-- ALERT OVERLAY -->
+  <div id="alertOverlay" aria-hidden="true">
+    <div class="alertModal" role="dialog" aria-modal="true">
 
-      <div class="alertgrid">
-        <div class="alertstat">
-          <div class="label">Risk</div>
-          <div class="value mono" id="alertRiskVal">—</div>
+      <div class="alertTop">
+        <div>
+          <h3 class="alertTitle">Possible kitchen risk detected</h3>
+          <p class="alertSub">
+            We detected a pattern consistent with danger. If you're safe, dismiss this.
+          </p>
         </div>
-        <div class="alertstat">
-          <div class="label">Sound</div>
-          <div class="value mono" id="alertAudioVal">—</div>
-        </div>
-        <div class="alertstat">
-          <div class="label">Temp</div>
-          <div class="value mono" id="alertTempVal">—</div>
-        </div>
-        <div class="alertstat">
-          <div class="label">Humidity</div>
-          <div class="value mono" id="alertHumVal">—</div>
-        </div>
-        <div class="alertstat">
-          <div class="label">Distance</div>
-          <div class="value mono" id="alertDistVal">—</div>
-        </div>
-        <div class="alertstat">
-          <div class="label">Token</div>
-          <div class="value mono" id="alertTokenVal">—</div>
+
+        <div class="chip"
+             style="border-color: rgba(251,113,133,.45);
+                    background: rgba(251,113,133,.10);">
+          <span class="dot red"></span>
+          <span class="mono">SOUSSAFE ALERT</span>
         </div>
       </div>
 
-      <div class="alertactions">
-        <button class="btn ghost" id="alertDismissBtn" type="button">I’m safe — dismiss</button>
-        <a class="btn" id="alertOpenLinkBtn" href="#" target="_self" rel="noopener">Open link</a>
+      <div class="alertBody">
+        <div class="alertGrid">
+
+          <div class="alertKV">
+            <div class="alertK">Risk</div>
+            <div class="alertV mono" id="alertRiskVal">—</div>
+          </div>
+
+          <div class="alertKV">
+            <div class="alertK">Sound</div>
+            <div class="alertV mono" id="alertAudioVal">—</div>
+          </div>
+
+          <div class="alertKV">
+            <div class="alertK">Temp</div>
+            <div class="alertV mono" id="alertTempVal">—</div>
+          </div>
+
+          <div class="alertKV">
+            <div class="alertK">Humidity</div>
+            <div class="alertV mono" id="alertHumVal">—</div>
+          </div>
+
+          <div class="alertKV">
+            <div class="alertK">Distance</div>
+            <div class="alertV mono" id="alertDistVal">—</div>
+          </div>
+
+          <div class="alertKV">
+            <div class="alertK">Token</div>
+            <div class="alertV mono" id="alertTokenVal">—</div>
+          </div>
+
+        </div>
+
+        <div class="alertContact mono"
+             id="alertContactLine"
+             style="display:none">
+        </div>
       </div>
 
-      <div class="alertfoot mono" id="alertContactLine" style="display:none"></div>
+      <div class="alertActions">
+        <button class="btn ghost"
+                id="alertDismissBtn"
+                type="button">
+          I'm safe — dismiss
+        </button>
+
+        <a class="btn"
+           id="alertOpenLinkBtn"
+           href="#"
+           target="_self">
+          Open link
+        </a>
+      </div>
+
     </div>
   </div>
+
 
   <!-- Search + filters -->
   <section class="panel">
     <div class="searchrow">
+
       <div class="search">
-        <input
-          id="recipeSearch"
-          type="search"
-          placeholder="Search recipes (e.g., pasta, soup, cookies)"
-          autocomplete="off"
-        />
+        <input id="recipeSearch"
+               type="search"
+               placeholder="Search recipes..."
+               autocomplete="off"/>
       </div>
 
       <div class="filters" id="filters">
-        <button class="chip is-active" data-filter="all" type="button">All</button>
-        <button class="chip" data-filter="quick" type="button">Quick</button>
-        <button class="chip" data-filter="veg" type="button">Veg</button>
-        <button class="chip" data-filter="protein" type="button">Protein</button>
-        <button class="chip" data-filter="dessert" type="button">Dessert</button>
+        <button class="chip is-active" data-filter="all">All</button>
+        <button class="chip" data-filter="quick">Quick</button>
+        <button class="chip" data-filter="veg">Veg</button>
+        <button class="chip" data-filter="protein">Protein</button>
+        <button class="chip" data-filter="dessert">Dessert</button>
       </div>
+
     </div>
 
     <div class="sectionhead" style="margin-top:12px">
@@ -96,7 +135,8 @@
     </div>
   </section>
 
-  <!-- Recipes grid -->
+
+  <!-- Recipes -->
   <section class="panel">
     <div class="sectionhead">
       <h2 class="sectiontitle">Recipes</h2>
@@ -104,48 +144,28 @@
     </div>
 
     <div class="productgrid" id="recipeGrid">
-      {#
-        Backend passes recipe_list as list[dict]:
-          [{ key, title, tag, thumb, meta }, ...]
-        This template also tolerates old tuple format (key, title).
-      #}
-
       {% for r in recipe_list %}
-        {% if r is mapping %}
-          {% set key = r.get("key") %}
-          {% set title = r.get("title") %}
-          {% set tag = r.get("tag","all") %}
-          {% set thumb = r.get("thumb","") %}
-          {% set meta = r.get("meta","Tap to open steps") %}
-        {% else %}
-          {% set key = r[0] %}
-          {% set title = r[1] %}
-          {% set tag = "all" %}
-          {% set thumb = "" %}
-          {% set meta = "Tap to open steps" %}
-        {% endif %}
-
         <a class="productcard"
-           href="/recipe/{{ key }}"
-           data-title="{{ (title or '')|lower }}"
-           data-tags="{{ (tag or 'all')|lower }}">
+           href="/recipe/{{ r.key }}"
+           data-title="{{ (r.title or '')|lower }}"
+           data-tags="{{ (r.tag or 'all')|lower }}">
+
           <div class="thumb">
-            {% if thumb %}
-              <img src="{{ thumb }}" alt="{{ title }} thumbnail" loading="lazy">
+            {% if r.thumb %}
+              <img src="{{ r.thumb }}" alt="{{ r.title }}" loading="lazy">
             {% else %}
-              <div class="thumbplaceholder" aria-hidden="true">
-                <div class="phicon"></div>
+              <div class="thumbplaceholder">
                 <div class="phtext">Image coming soon</div>
               </div>
             {% endif %}
           </div>
 
           <div class="cardbody">
-            <div class="cardtitle">{{ title }}</div>
-            <div class="cardmeta">{{ meta }}</div>
+            <div class="cardtitle">{{ r.title }}</div>
+            <div class="cardmeta">{{ r.meta }}</div>
 
             <div class="cardfooter">
-              <span class="pill">{{ tag }}</span>
+              <span class="pill">{{ r.tag }}</span>
               <span class="linkhint">Open</span>
             </div>
           </div>
@@ -154,8 +174,10 @@
     </div>
   </section>
 
-  <!-- (1) Live sensor panel + (2) Emergency contact -->
-  <section class="panel">
+
+  <!-- Device status + contacts -->
+  <section class="panel" id="devicePanel">
+
     <div class="sectionhead">
       <h2 class="sectiontitle">Device status</h2>
       <div class="subtle">Live preview — updates every few seconds</div>
@@ -165,78 +187,76 @@
       <div class="stat">
         <div class="label">Timer</div>
         <div class="value mono" id="timerVal">15:00</div>
-        <div class="hint">Active cook timer</div>
       </div>
 
       <div class="stat">
         <div class="label">Kitchen</div>
         <div class="value mono" id="kitchenVal">—</div>
-        <div class="hint">Temp · Humidity</div>
       </div>
 
       <div class="stat">
         <div class="label">Distance</div>
         <div class="value mono" id="distanceVal">—</div>
-        <div class="hint">Proximity (cm)</div>
       </div>
 
       <div class="stat">
         <div class="label">Sound</div>
         <div class="value mono" id="audioVal">—</div>
-        <div class="hint">Mic level</div>
       </div>
 
       <div class="stat">
         <div class="label">Heat</div>
-        <div class="value" id="heatVal"><span class="dot blue"></span> Prep</div>
-        <div class="hint">Stage from risk</div>
+        <div class="value" id="heatVal">
+          <span class="dot blue"></span> Prep
+        </div>
       </div>
 
       <div class="stat">
         <div class="label">Last link</div>
         <div class="value mono" id="triggerVal">—</div>
-        <div class="hint">Most recent token</div>
       </div>
     </div>
 
-    <div class="sectionhead" style="margin-top:14px">
-      <h3 class="sectiontitle" style="font-size:1.02rem">Trusted contact</h3>
-      <span class="subtle">Used for alerts when risk crosses threshold</span>
+
+    <!-- CONTACTS -->
+    <div class="sectionhead" style="margin-top:20px">
+      <h3 class="sectiontitle">Trusted contacts</h3>
+      <span class="subtle">Add up to 3 contacts</span>
     </div>
 
-    <!-- Emergency contact form -->
     <form class="contactpanel" id="contactForm" autocomplete="off">
       <div class="contactrow">
+
         <label class="field">
           <span class="label">Name</span>
-          <input id="contactName" type="text" placeholder="e.g., Mom" />
+          <input id="contactName" type="text" placeholder="e.g., Mom"/>
         </label>
 
         <label class="field">
           <span class="label">Method</span>
           <select id="contactMethod">
-            <option value="sms">SMS</option>
             <option value="email">Email</option>
+            <option value="sms">SMS</option>
           </select>
         </label>
 
         <label class="field" style="flex:1.2">
           <span class="label">Phone or email</span>
-          <input id="contactValue" type="text" placeholder="e.g., +1 555 123 4567" />
+          <input id="contactValue" type="text"
+                 placeholder="e.g., example@email.com"/>
         </label>
 
-        <button class="btn" id="contactSaveBtn" type="submit">Save</button>
+        <button class="btn" type="submit">Add</button>
       </div>
 
-      <div class="subtle" id="contactStatus">Not set</div>
+      <div class="subtle" id="contactStatus">No contacts yet</div>
+
+      <!-- Filled by app.js -->
+      <div id="contactList" style="margin-top:10px"></div>
     </form>
 
-    <div class="footnote">
-      Tip: For demo triggers, POST to <span class="mono">/api/trigger</span> and open
-      <span class="mono">/r/&lt;token&gt;</span>.
-      <span class="mono">Overlay appears when risk ≥ threshold.</span>
-    </div>
   </section>
+
 
   <script src="{{ url_for('static', filename='app.js') }}"></script>
 </body>

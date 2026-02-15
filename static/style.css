@@ -423,6 +423,86 @@ a{color:inherit}
   margin-top:2px;
 }
 
+/* ---------- Trusted Contact (new) ---------- */
+.contactpanel{
+  margin-top:10px;
+  padding:14px;
+  border-radius:18px;
+  border:1px solid rgba(44,89,255,.25);
+  background:
+    radial-gradient(500px 200px at 10% 0%, rgba(44,89,255,.08), transparent 60%),
+    rgba(15,17,21,.55);
+  box-shadow: 0 8px 30px rgba(0,0,0,.35);
+}
+
+.contactrow{
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap;
+  align-items:flex-end;
+}
+
+.field{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  flex:1;
+  min-width:150px;
+}
+
+.field input,
+.field select{
+  padding:10px 12px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background: rgba(20,24,36,.7);
+  color:var(--text);
+  font-size:14px;
+  outline:none;
+  transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+}
+
+/* remove default select look */
+.field select{
+  appearance:none;
+  -webkit-appearance:none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 18px) calc(1.2em),
+    calc(100% - 12px) calc(1.2em);
+  background-size:6px 6px;
+  background-repeat:no-repeat;
+}
+
+.field input:focus,
+.field select:focus{
+  border-color: rgba(44,89,255,.65);
+  box-shadow: 0 0 0 3px rgba(44,89,255,.15);
+  background: rgba(20,24,36,.9);
+}
+
+#contactSaveBtn{
+  padding:10px 18px;
+  border-radius:999px;
+  font-weight:900;
+  background: linear-gradient(135deg, #2c59ff, #6b7dff);
+  box-shadow: 0 6px 20px rgba(44,89,255,.3);
+}
+
+#contactSaveBtn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 10px 25px rgba(44,89,255,.4);
+}
+
+#contactStatus{
+  margin-top:10px;
+  font-size:13px;
+  color:var(--muted);
+  padding-left:2px;
+}
+
 /* ---------- Steps / recipe page ---------- */
 .steps{
   padding-left:0;
@@ -550,8 +630,14 @@ a{color:inherit}
 
 .tip p{margin:8px 0}
 
-/* ---------- Alert Overlay (for home.html) ---------- */
-#alertOverlay{
+/* ==========================================================
+   Alert Overlay (matches home.html class names)
+   home.html uses: alertoverlay, alertmodal, alertbadge,
+   alerttitle, alertsubtle, alertgrid, alertstat, alertactions,
+   alertfoot
+   ========================================================== */
+
+.alertoverlay{
   position:fixed;
   inset:0;
   display:none; /* JS toggles to grid */
@@ -562,72 +648,70 @@ a{color:inherit}
   padding:16px;
 }
 
-.alertModal{
-  width:min(720px, 100%);
+.alertmodal{
+  width:min(760px, 100%);
   border-radius: 22px;
   border:1px solid rgba(251,113,133,.45);
   background: rgba(22,26,34,.96);
   box-shadow: 0 20px 60px rgba(0,0,0,.55);
   overflow:hidden;
-}
-
-.alertTop{
-  display:flex;
-  align-items:flex-start;
-  justify-content:space-between;
-  gap:12px;
-  padding:14px 14px 10px;
-  background:
-    radial-gradient(800px 200px at 10% 0%, rgba(251,113,133,.18), transparent 55%),
-    rgba(15,17,21,.35);
-  border-bottom: 1px solid rgba(38,44,57,.75);
-}
-
-.alertTitle{
-  margin:0;
-  font-size:16px;
-  letter-spacing:.2px;
-  font-weight:950;
-}
-
-.alertSub{
-  margin-top:6px;
-  color: var(--muted);
-  font-size:13px;
-}
-
-.alertBody{
   padding:14px;
 }
 
-.alertGrid{
+.alertbadge{
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+  border-radius:999px;
+  border:1px solid rgba(251,113,133,.35);
+  background: rgba(251,113,133,.10);
+  padding:8px 12px;
+  margin-bottom:10px;
+}
+
+.alerttitle{
+  margin:0;
+  font-size:18px;
+  font-weight:950;
+  letter-spacing:.2px;
+}
+
+.alertsubtle{
+  margin:8px 0 12px;
+  color: var(--muted);
+  font-size:13px;
+  line-height:1.35;
+}
+
+.alertgrid{
   display:grid;
   grid-template-columns: 1fr 1fr;
   gap:10px;
 }
 
 @media (max-width: 560px){
-  .alertGrid{grid-template-columns:1fr;}
+  .alertgrid{grid-template-columns:1fr;}
 }
 
-.alertKV{
+.alertstat{
   border:1px solid var(--border);
   border-radius:14px;
   padding:10px;
+
+
   background: rgba(15,17,21,.55);
 }
 
-.alertK{
-  color: var(--muted);
-  font-size:12px;
-  margin-bottom:6px;
+.alertactions{
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  margin-top:12px;
+  padding-top:12px;
+  border-top:1px solid rgba(38,44,57,.75);
 }
 
-.alertV{
-  font-weight:950;
-}
-
-.alertContact{
+.alertfoot{
   margin-top:10px;
   border:1px solid rgba(44,89,255,.35);
   background: rgba(44,89,255,.10);
@@ -636,22 +720,3 @@ a{color:inherit}
   color:#cfd8ff;
   font-size:13px;
 }
-
-.alertActions{
-  display:flex;
-  gap:10px;
-  justify-content:flex-end;
-  padding:12px 14px 14px;
-  border-top:1px solid rgba(38,44,57,.75);
-  background: rgba(15,17,21,.35);
-}
-
-.alertActions .btn{
-  padding:10px 12px;
-  border-radius:14px;
-}
-
-.btn.danger{
-  background: var(--danger);
-}
-.btn.danger:hover{filter:brightness(1.03)}
