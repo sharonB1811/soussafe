@@ -4,21 +4,16 @@ import sqlite3
 import secrets
 from datetime import datetime
 import os
-import json
 
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 
 app = Flask(__name__)
-app.secret_key = "dev-secret-change-me"
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 
-DB = "soussafe.db"
+DB = os.getenv("SOUSSAFE_DB", "soussafe.db")
 
 # ---------------- AWS (SNS) ----------------
-# Env vars:
-#   export SNS_TOPIC_ARN="arn:aws:sns:us-east-1:123456789012:SousSafeAlerts"
-#   export AWS_REGION="us-east-1"
-#   export ALERT_THRESHOLD="6"
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "PASTE_YOUR_TOPIC_ARN_HERE")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 ALERT_THRESHOLD = int(os.getenv("ALERT_THRESHOLD", "6"))
@@ -49,8 +44,11 @@ def db():
 
 def init_db():
     """
-    - alerts: sensor snapshots
-    - contacts: up to MAX_CONTACTS trusted contacts
+    alerts:
+      - active: 1 = current alert, 0 = resolved
+      - source_event: arduino event that caused it (optional)
+    contacts:
+      - up to MAX_CONTACTS
     """
     conn = db()
     cur = conn.cursor()
@@ -66,15 +64,22 @@ def init_db():
             temp REAL,
             humidity REAL,
             distance_cm REAL,
-            device_id TEXT NOT NULL
+            device_id TEXT NOT NULL,
+            source_event TEXT,
+            active INTEGER NOT NULL DEFAULT 1
         )
     """)
 
-    # lightweight migration
+    # Lightweight migrations for existing DBs
     try:
         cols = {r["name"] for r in cur.execute("PRAGMA table_info(alerts)").fetchall()}
         if "distance_cm" not in cols:
             cur.execute("ALTER TABLE alerts ADD COLUMN distance_cm REAL")
+        if "active" not in cols:
+            cur.execute("ALTER TABLE alerts ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+            cur.execute("UPDATE alerts SET active = 1 WHERE active IS NULL")
+        if "source_event" not in cols:
+            cur.execute("ALTER TABLE alerts ADD COLUMN source_event TEXT")
     except sqlite3.Error:
         pass
 
@@ -161,10 +166,6 @@ def sns_is_configured() -> bool:
 
 
 def sns_subscribe_email(email: str) -> dict:
-    """
-    Subscribe email endpoint to SNS topic.
-    SNS requires email confirmation in inbox.
-    """
     if not sns_is_configured():
         return {"ok": False, "subscription_arn": None, "error": "SNS_TOPIC_ARN not set"}
 
@@ -175,13 +176,17 @@ def sns_subscribe_email(email: str) -> dict:
             Endpoint=email,
             ReturnSubscriptionArn=True,
         )
-        arn = resp.get("SubscriptionArn")  # often "PendingConfirmation"
+        arn = resp.get("SubscriptionArn")
         return {"ok": True, "subscription_arn": arn, "error": None}
     except (BotoCoreError, ClientError) as e:
         return {"ok": False, "subscription_arn": None, "error": str(e)}
 
 
 def try_publish_sns(payload: dict) -> dict:
+    """
+    Publishes ONE notification per new active alert token (we only call this from /api/trigger).
+    Cancel/resolve does NOT publish.
+    """
     if not sns_is_configured():
         return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
 
@@ -195,6 +200,7 @@ def try_publish_sns(payload: dict) -> dict:
                 f"Device: {payload.get('device_id')}\n"
                 f"Trigger: {payload.get('trigger_type')}\n"
                 f"Risk: {payload.get('risk')}\n"
+                f"Event: {payload.get('event')}\n"
                 f"Audio: {payload.get('audio_level')}\n"
                 f"Temp: {payload.get('temp')}\n"
                 f"Humidity: {payload.get('humidity')}\n"
@@ -297,34 +303,25 @@ RECIPES = {
 }
 
 
-# ---------------- Risk Scoring ----------------
-def compute_risk(audio_level: int | None,
-                 after_10pm: bool,
-                 temp: float | None,
-                 manual: bool,
-                 distance_cm: float | None = None) -> int:
-    risk = 0
-    if manual:
-        risk += 4
+# ---------------- Risk scoring: Arduino is source-of-truth ----------------
+# You said: "i want the risk to be determined based on whatever arduino says"
+# Your Arduino currently doesn't send "risk" in JSON. So the next best “Arduino truth”
+# is the event type. We map Arduino event -> fixed risk (0..10).
+EVENT_RISK = {
+    "emergency_timeout": 10,
+    "emergency_touch_3tap": 10,
+    "timer_done": 6,  # make this >= threshold if you want SNS on timer finish
+    # dismiss/debug:
+    "emergency_cancel": 0,
+    "emergency_start": 0,
+    "ok_hold_5s": 0,
+}
 
-    if audio_level is not None:
-        if audio_level >= 95:
-            risk += 6
-        elif audio_level >= 85:
-            risk += 4
-        elif audio_level >= 75:
-            risk += 2
-
-    if after_10pm:
-        risk += 2
-
-    if temp is not None and temp >= 85:
-        risk += 1
-
-    if distance_cm is not None and distance_cm <= 10:
-        risk += 1
-
-    return max(0, min(risk, 10))
+def risk_from_event(event: str) -> int:
+    e = (event or "").strip()
+    if not e:
+        return 0
+    return int(EVENT_RISK.get(e, 6))  # default mid risk if unknown event
 
 
 def recipe_for_risk(risk: int) -> str:
@@ -423,7 +420,6 @@ def api_delete_contact_route(contact_id):
 
     delete_contact(contact_id)
 
-    # NOTE: We can't reliably unsubscribe without storing SubscriptionArn per contact.
     sns_result = None
     if c.get("method") == "email" and sns_is_configured():
         sns_result = {
@@ -439,7 +435,12 @@ def api_delete_contact_route(contact_id):
 @app.get("/api/context")
 def api_context():
     conn = db()
-    row = conn.execute("SELECT * FROM alerts ORDER BY id DESC LIMIT 1").fetchone()
+    row = conn.execute("""
+        SELECT * FROM alerts
+        WHERE active = 1
+        ORDER BY id DESC
+        LIMIT 1
+    """).fetchone()
     conn.close()
 
     if not row:
@@ -462,45 +463,115 @@ def api_context():
         "created_at": row["created_at"],
         "public_link": f"/r/{row['token']}",
         "threshold": ALERT_THRESHOLD,
+        "event": row["source_event"],
     })
 
 
-# --------- Trigger endpoint (device posts here) ----------
+# --------- Resolve endpoint (bridge/app posts here on cancel/dismiss) ----------
+@app.post("/api/resolve")
+def api_resolve():
+    data = request.get_json(silent=True) or {}
+    device_id = data.get("device")  # optional
+    token = data.get("token")       # optional
+
+    conn = db()
+    cur = conn.cursor()
+
+    row = None
+    if token:
+        row = cur.execute("""
+            SELECT id, token FROM alerts
+            WHERE active = 1 AND token = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (str(token),)).fetchone()
+    elif device_id:
+        row = cur.execute("""
+            SELECT id, token FROM alerts
+            WHERE active = 1 AND device_id = ?
+            ORDER BY id DESC
+            LIMIT 1
+        """, (str(device_id),)).fetchone()
+    else:
+        row = cur.execute("""
+            SELECT id, token FROM alerts
+            WHERE active = 1
+            ORDER BY id DESC
+            LIMIT 1
+        """).fetchone()
+
+    if not row:
+        conn.close()
+        return jsonify({"ok": True, "cleared": False, "token": None})
+
+    alert_id = int(row["id"])
+    cleared_token = row["token"]
+
+    cur.execute("UPDATE alerts SET active = 0 WHERE id = ?", (alert_id,))
+    conn.commit()
+    conn.close()
+
+    return jsonify({"ok": True, "cleared": True, "token": cleared_token})
+
+
+# --------- Trigger endpoint (bridge posts here) ----------
 @app.post("/api/trigger")
 def api_trigger():
+    """
+    Expects bridge.py payload like:
+      {
+        "device": "K01",
+        "trigger": "manual"|"automatic",
+        "distance_cm": 12.3,
+        "audio": null,
+        "temp": null,
+        "humidity": null,
+        "event": "emergency_timeout" | "timer_done" | ...
+        OPTIONAL: "risk": <int 0..10>  # if you ever add it later
+      }
+
+    Risk source-of-truth:
+      - If payload provides "risk": use it
+      - else: derive from Arduino "event" via EVENT_RISK
+    """
     data = request.get_json(force=True) or {}
 
     device_id = str(data.get("device", "K01"))
     trigger_type = str(data.get("trigger", "manual"))
-    manual = (trigger_type == "manual")
 
     audio_level = data.get("audio")
     temp = data.get("temp")
     humidity = data.get("humidity")
     distance_cm = data.get("distance_cm", data.get("distance"))
+    event = str(data.get("event", "")).strip()
 
-    hour = datetime.now().hour
-    after_10pm = (hour >= 22)
-
-    provided_risk = data.get("risk")
-    if provided_risk is None:
-        risk = compute_risk(
-            audio_level=int(audio_level) if audio_level is not None else None,
-            after_10pm=after_10pm,
-            temp=float(temp) if temp is not None else None,
-            manual=manual,
-            distance_cm=float(distance_cm) if distance_cm is not None else None
-        )
+    provided_risk = data.get("risk", None)
+    if provided_risk is not None:
+        try:
+            risk = int(provided_risk)
+        except Exception:
+            risk = risk_from_event(event)
     else:
-        risk = int(provided_risk)
+        risk = risk_from_event(event)
+
+    risk = max(0, min(int(risk), 10))
 
     token = secrets.token_urlsafe(6)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     conn = db()
-    conn.execute("""
-        INSERT INTO alerts (token, risk, trigger_type, created_at, audio_level, temp, humidity, distance_cm, device_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    cur = conn.cursor()
+
+    # Make this new alert the only "active" one for this device
+    cur.execute("UPDATE alerts SET active = 0 WHERE device_id = ? AND active = 1", (device_id,))
+
+    cur.execute("""
+        INSERT INTO alerts (
+          token, risk, trigger_type, created_at,
+          audio_level, temp, humidity, distance_cm,
+          device_id, source_event, active
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
     """, (
         token,
         risk,
@@ -510,14 +581,17 @@ def api_trigger():
         float(temp) if temp is not None else None,
         float(humidity) if humidity is not None else None,
         float(distance_cm) if distance_cm is not None else None,
-        device_id
+        device_id,
+        event if event else None,
     ))
+
     conn.commit()
     conn.close()
 
     recipe_key = recipe_for_risk(risk)
     public_link = f"/r/{token}"
 
+    # SNS only for real alerts (>= threshold)
     sns_result = {"ok": False, "message_id": None, "error": "below threshold"}
     if risk >= ALERT_THRESHOLD:
         sns_result = try_publish_sns({
@@ -531,14 +605,17 @@ def api_trigger():
             "distance_cm": float(distance_cm) if distance_cm is not None else None,
             "device_id": device_id,
             "public_link": public_link,
+            "event": event,
         })
 
     return jsonify({
+        "ok": True,
         "message": f"{RECIPES[recipe_key]['title']} tip of the day!",
         "link": public_link,
         "recipe_key": recipe_key,
         "risk": risk,
         "threshold": ALERT_THRESHOLD,
+        "event": event,
         "sns": sns_result,
     })
 
@@ -574,7 +651,7 @@ def dev_fire():
         "tip": "Use curl to trigger events. Example:",
         "curl": """curl -X POST http://127.0.0.1:5050/api/trigger \\
   -H "Content-Type: application/json" \\
-  -d '{"trigger":"automatic","audio":92,"temp":78,"humidity":45,"distance_cm":12,"device":"K01"}'"""
+  -d '{"trigger":"manual","event":"timer_done","distance_cm":12,"device":"K01"}'"""
     })
 
 

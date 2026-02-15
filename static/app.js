@@ -1,11 +1,14 @@
 // static/app.js
-// SousSafe behavior (home + dashboard):
-// - Home: recipe search/filter + status polling + contacts (max 3) + alert overlay
-// - Home: click SousSafe title to open/close the alert overlay (manual reveal)
-// - Dashboard: hide/show alert panel when clicking the brand title
+// SousSafe behavior (home + dashboard)
+//
+// Requirements you asked for:
+// - Overlay shows ONLY when Arduino triggers an ACTIVE alert on the server (/api/context has last_token).
+// - Clicking SousSafe title should NOT show alert unless there's an active alert already.
+// - Dismiss via website OR Arduino cancel must make alert disappear (server-side resolve).
+// - Race-proof: don't re-open the same token while resolve is in-flight.
 
 (function () {
-  // ---------------- Shared: tiny utils ----------------
+  // ---------------- Shared utils ----------------
   function norm(s) {
     return (s || "").toString().trim().toLowerCase();
   }
@@ -40,7 +43,6 @@
   }
 
   function fmtTime(ts) {
-    // backend sends "YYYY-MM-DD HH:MM:SS"
     if (!ts || typeof ts !== "string") return "";
     const m = ts.match(/\s(\d{2}:\d{2})/);
     return m ? m[1] : ts;
@@ -56,7 +58,17 @@
       .replace(/'/g, "&#39;");
   }
 
+  function tokenIsReal(tok) {
+    if (tok === null || tok === undefined) return false;
+    const t = String(tok).trim();
+    if (!t) return false;
+    if (t === "—") return false;
+    if (t.toLowerCase() === "null" || t.toLowerCase() === "undefined") return false;
+    return true;
+  }
+
   // ---------------- Dashboard toggle (brand click) ----------------
+  // (Dashboard page can still toggle alert panel visibility)
   (function initDashboardToggle() {
     const brandToggle = document.getElementById("brandToggle");
     const alertPanel = document.getElementById("alertPanel");
@@ -137,16 +149,17 @@
   const brandToggleHome = document.getElementById("brandToggle");
 
   // ---------------- State ----------------
-  let lastOverlayTokenShown = null;
   let lastCtx = null;
+  let lastOverlayTokenShown = null;
 
   const LS_LAST_TRIGGER = "soussafe:lastTrigger";
-  const LS_LAST_OVERLAY_DISMISS = "soussafe:lastOverlayDismissToken";
+  const LS_SUPPRESSED_TOKEN = "soussafe:suppressedToken"; // token suppressed until server clears it
 
   // Contacts cache
   let contactsCache = [];
   let contactsMax = 3;
 
+  // ---------------- Recipe helpers ----------------
   function getCardTags(card) {
     const raw = norm(card.getAttribute("data-tags") || card.getAttribute("data-tag"));
     const parts = raw.split(/\s+/).filter(Boolean);
@@ -196,7 +209,6 @@
     }
   }
 
-  // ------------ Events: recipes ------------
   if (searchInput) {
     searchInput.addEventListener("input", applyFilters);
     searchInput.addEventListener("keydown", (e) => {
@@ -216,7 +228,7 @@
     });
   }
 
-  // ------------ Status helpers ------------
+  // ---------------- Status helpers ----------------
   function setHeatStageFromRisk(risk) {
     if (!heatVal) return;
     const r = safeNum(risk) ?? 0;
@@ -247,27 +259,49 @@
     document.body.style.overflow = isOpen ? "hidden" : "";
   }
 
-  function shouldShowOverlay(ctx) {
-    // auto-open rule (optional)
-    if (!overlay) return false;
-    if (!ctx || ctx.ok !== true) return false;
-    if (!ctx.last_token) return false;
+  function clearOverlayFields() {
+    if (alertTokenVal) alertTokenVal.textContent = "—";
+    if (alertRiskVal) alertRiskVal.textContent = "—";
+    if (alertAudioVal) alertAudioVal.textContent = "—";
+    if (alertTempVal) alertTempVal.textContent = "—";
+    if (alertHumVal) alertHumVal.textContent = "—";
+    if (alertDistVal) alertDistVal.textContent = "—";
+    if (alertOpenLinkBtn) alertOpenLinkBtn.href = "#";
+    if (alertContactLine) {
+      alertContactLine.style.display = "none";
+      alertContactLine.textContent = "";
+    }
+  }
 
-    const risk = safeNum(ctx.risk) ?? 0;
-    const threshold = safeNum(ctx.threshold) ?? null;
-    if (threshold === null) return false;
+  function getSuppressedToken() {
+    try {
+      return localStorage.getItem(LS_SUPPRESSED_TOKEN);
+    } catch {
+      return null;
+    }
+  }
 
-    if (risk < threshold) return false;
-    if (lastOverlayTokenShown === ctx.last_token) return false;
+  function setSuppressedToken(token) {
+    try {
+      if (tokenIsReal(token)) localStorage.setItem(LS_SUPPRESSED_TOKEN, String(token).trim());
+      else localStorage.removeItem(LS_SUPPRESSED_TOKEN);
+    } catch {}
+  }
 
-    const dismissedToken = localStorage.getItem(LS_LAST_OVERLAY_DISMISS);
-    if (dismissedToken && dismissedToken === ctx.last_token) return false;
+  function clearSuppressedToken() {
+    try {
+      localStorage.removeItem(LS_SUPPRESSED_TOKEN);
+    } catch {}
+  }
 
-    return true;
+  function clearActiveAlertUI() {
+    if (isOverlayOpen()) setOverlayOpen(false);
+    clearOverlayFields();
+    lastOverlayTokenShown = null;
+    clearSuppressedToken();
   }
 
   function pickPrimaryContact() {
-    // Prefer email contacts, else first contact
     if (!contactsCache || contactsCache.length === 0) return null;
     const email = contactsCache.find((c) => norm(c.method) === "email");
     return email || contactsCache[0];
@@ -280,18 +314,16 @@
     const audio = safeNum(ctx.audio);
     const temp = safeNum(ctx.temp);
     const hum = safeNum(ctx.humidity);
-    const dist = safeNum(ctx.distance);
+    const dist = safeNum(ctx.distance_cm ?? ctx.distance);
 
     if (alertRiskVal) alertRiskVal.textContent = risk === null ? "—" : `${Math.round(risk)}/10`;
     if (alertAudioVal) alertAudioVal.textContent = audio === null ? "—" : `${Math.round(audio)}`;
     if (alertTempVal) alertTempVal.textContent = fmtTemp(temp);
     if (alertHumVal) alertHumVal.textContent = fmtHum(hum);
     if (alertDistVal) alertDistVal.textContent = fmtDist(dist);
-    if (alertTokenVal) alertTokenVal.textContent = ctx.last_token || "—";
+    if (alertTokenVal) alertTokenVal.textContent = tokenIsReal(ctx.last_token) ? String(ctx.last_token) : "—";
 
-    if (alertOpenLinkBtn) {
-      alertOpenLinkBtn.href = ctx.public_link || "#";
-    }
+    if (alertOpenLinkBtn) alertOpenLinkBtn.href = ctx.public_link || "#";
 
     if (alertContactLine) {
       const c = pickPrimaryContact();
@@ -307,9 +339,28 @@
     }
   }
 
-  // ------------ Contacts: load / render / add / delete ------------
+  // Auto-open ONLY from server active alert + meets threshold + not suppressed
+  function shouldAutoOpenOverlay(ctx) {
+    if (!overlay) return false;
+    if (!ctx || ctx.ok !== true) return false;
+    if (!tokenIsReal(ctx.last_token)) return false;
+
+    const risk = safeNum(ctx.risk) ?? 0;
+    const threshold = safeNum(ctx.threshold);
+    if (threshold === null) return false;
+    if (risk < threshold) return false;
+
+    // don't re-open same token over and over
+    if (lastOverlayTokenShown === ctx.last_token) return false;
+
+    const suppressed = getSuppressedToken();
+    if (suppressed && suppressed === String(ctx.last_token).trim()) return false;
+
+    return true;
+  }
+
+  // ---------------- Contacts: load / render / add / delete ----------------
   function ensureContactsListUI() {
-    // Create a small list UI under the contact status line if it doesn't exist.
     if (!contactForm) return null;
 
     let list = document.getElementById("contactList");
@@ -317,7 +368,6 @@
       list = document.createElement("div");
       list.id = "contactList";
       list.style.marginTop = "10px";
-      // insert after contactStatus
       const anchor = contactStatus || contactForm;
       anchor.parentNode.insertBefore(list, anchor.nextSibling);
     }
@@ -343,10 +393,11 @@
       contactStatus.textContent =
         n === 0
           ? `No contacts yet • Add up to ${contactsMax}`
-          : `Saved ${n}/${contactsMax} contact${n === 1 ? "" : "s"} • ${remaining} slot${remaining === 1 ? "" : "s"} left`;
+          : `Saved ${n}/${contactsMax} contact${n === 1 ? "" : "s"} • ${remaining} slot${
+              remaining === 1 ? "" : "s"
+            } left`;
     }
 
-    // Disable add when max reached
     setContactInputsDisabled(n >= contactsMax);
 
     if (n === 0) {
@@ -374,7 +425,6 @@
 
     listEl.innerHTML = items;
 
-    // wire remove buttons
     listEl.querySelectorAll(".contactRemoveBtn").forEach((btn) => {
       btn.addEventListener("click", async () => {
         const id = btn.getAttribute("data-id");
@@ -411,15 +461,13 @@
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data || data.ok !== true) {
-        const msg = (data && data.error) ? data.error : "Could not add contact (server error).";
+        const msg = data && data.error ? data.error : "Could not add contact (server error).";
         if (contactStatus) contactStatus.textContent = msg;
         return null;
       }
 
-      // server returns updated contacts
       contactsCache = Array.isArray(data.contacts) ? data.contacts : contactsCache;
 
-      // SNS note (if email)
       if (data.sns && payload.method === "email") {
         if (contactStatus) {
           contactStatus.textContent = data.sns.ok
@@ -428,7 +476,6 @@
         }
       }
 
-      // clear inputs for next add
       if (contactName) contactName.value = "";
       if (contactValue) contactValue.value = "";
 
@@ -442,13 +489,11 @@
 
   async function deleteContact(id) {
     try {
-      const res = await fetch(`/api/contact/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(`/api/contact/${encodeURIComponent(id)}`, { method: "DELETE" });
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data || data.ok !== true) {
-        const msg = (data && data.error) ? data.error : "Could not remove contact.";
+        const msg = data && data.error ? data.error : "Could not remove contact.";
         if (contactStatus) contactStatus.textContent = msg;
         return null;
       }
@@ -478,13 +523,30 @@
     });
   }
 
-  // ------------ Overlay buttons ------------
-  function dismissOverlay() {
-    const token = alertTokenVal?.textContent?.trim();
-    if (token && token !== "—") {
-      localStorage.setItem(LS_LAST_OVERLAY_DISMISS, token);
-      lastOverlayTokenShown = token;
+  // ---------------- Overlay dismiss (server resolve) ----------------
+  async function resolveServerSide(token, device) {
+    try {
+      await fetch("/api/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(token ? { token } : device ? { device } : {}),
+      });
+      return true;
+    } catch {
+      return false;
     }
+  }
+
+  async function dismissOverlay() {
+    // Close immediately, but also clear server-side so it stays gone.
+    const token = lastCtx && tokenIsReal(lastCtx.last_token) ? String(lastCtx.last_token).trim() : null;
+
+    if (token) {
+      setSuppressedToken(token);      // prevents re-open while DB/poll catches up
+      lastOverlayTokenShown = token;  // prevents immediate auto-open loop
+      await resolveServerSide(token, null);
+    }
+
     setOverlayOpen(false);
   }
 
@@ -501,8 +563,11 @@
     });
   }
 
-  // Manual open/close overlay when clicking SousSafe title
-  async function openOverlayFromBrandClick() {
+  // ---------------- Title click on HOME ----------------
+  // IMPORTANT CHANGE:
+  // Clicking brand does NOT "manual reveal" alerts.
+  // It only toggles visibility if an alert is currently active.
+  async function onBrandClickHome() {
     if (!overlay) return;
 
     if (isOverlayOpen()) {
@@ -510,48 +575,46 @@
       return;
     }
 
-    // Ensure we have contacts for the contact line
-    await loadContacts().catch(() => null);
-
-    // Prefer freshest context
-    let ctx = lastCtx;
+    // Only open overlay if server has an active alert right now
+    let ctx = null;
     try {
       const res = await fetch("/api/context", { cache: "no-store" });
-      if (res.ok) {
-        const fresh = await res.json();
-        if (fresh && fresh.ok === true) ctx = fresh;
-      }
+      if (res.ok) ctx = await res.json();
     } catch {}
 
-    if (!ctx || ctx.ok !== true || !ctx.last_token) {
-      if (alertTokenVal) alertTokenVal.textContent = "—";
-      if (alertRiskVal) alertRiskVal.textContent = "—";
-      if (alertAudioVal) alertAudioVal.textContent = "—";
-      if (alertTempVal) alertTempVal.textContent = "—";
-      if (alertHumVal) alertHumVal.textContent = "—";
-      if (alertDistVal) alertDistVal.textContent = "—";
-      if (alertContactLine) alertContactLine.style.display = "none";
-      if (alertOpenLinkBtn) alertOpenLinkBtn.href = "#";
-      setOverlayOpen(true);
+    if (!ctx || ctx.ok !== true || !tokenIsReal(ctx.last_token)) {
+      // No active alert -> do nothing
       return;
     }
 
+    // If it's currently being cleared, also do nothing
+    const suppressed = getSuppressedToken();
+    if (suppressed && suppressed === String(ctx.last_token).trim()) {
+      return;
+    }
+
+    // Optionally load contacts for display
+    if (!contactsCache || contactsCache.length === 0) {
+      await loadContacts().catch(() => null);
+    }
+
+    lastCtx = ctx;
     fillOverlay(ctx);
     lastOverlayTokenShown = ctx.last_token;
     setOverlayOpen(true);
   }
 
   if (brandToggleHome) {
-    brandToggleHome.addEventListener("click", openOverlayFromBrandClick);
+    brandToggleHome.addEventListener("click", onBrandClickHome);
     brandToggleHome.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
-        openOverlayFromBrandClick();
+        onBrandClickHome();
       }
     });
   }
 
-  // ------------ Status hydration from /api/context ------------
+  // ---------------- Status hydration from /api/context ----------------
   async function tryHydrateContext() {
     try {
       const res = await fetch("/api/context", { cache: "no-store" });
@@ -562,23 +625,34 @@
 
       lastCtx = ctx;
 
-      if (!ctx.last_token) {
+      // When server reports "no active alert", clear everything (this handles Arduino cancel too)
+      if (!tokenIsReal(ctx.last_token)) {
         if (kitchenVal) kitchenVal.textContent = "—";
         if (distanceVal) distanceVal.textContent = "—";
         if (audioVal) audioVal.textContent = "—";
-        setHeatStageFromRisk(0);
         if (triggerVal) triggerVal.textContent = "—";
+        setHeatStageFromRisk(0);
+
+        clearActiveAlertUI();
         return;
       }
 
+      // If active token changed, drop any old suppression
+      const suppressed = getSuppressedToken();
+      if (suppressed && suppressed !== String(ctx.last_token).trim()) {
+        clearSuppressedToken();
+        lastOverlayTokenShown = null;
+      }
+
       if (kitchenVal) kitchenVal.textContent = `${fmtTemp(ctx.temp)} · ${fmtHum(ctx.humidity)}`;
-      if (distanceVal) distanceVal.textContent = fmtDist(ctx.distance);
+      if (distanceVal) distanceVal.textContent = fmtDist(ctx.distance_cm ?? ctx.distance);
       if (audioVal) audioVal.textContent = fmtAudio(ctx.audio);
       setHeatStageFromRisk(ctx.risk);
 
       if (triggerVal) {
         const timePart = fmtTime(ctx.created_at);
-        triggerVal.textContent = timePart ? `${ctx.last_token} · ${timePart}` : ctx.last_token;
+        const tok = String(ctx.last_token).trim();
+        triggerVal.textContent = timePart ? `${tok} · ${timePart}` : tok;
       }
 
       if (timerVal && (!timerVal.textContent || !timerVal.textContent.trim())) {
@@ -586,18 +660,24 @@
       }
 
       const stamp = new Date().toLocaleString();
-      localStorage.setItem(LS_LAST_TRIGGER, `${ctx.last_token} · ${stamp}`);
+      try {
+        localStorage.setItem(LS_LAST_TRIGGER, `${ctx.last_token} · ${stamp}`);
+      } catch {}
 
-      // OPTIONAL: auto-open overlay when risk >= threshold
-      // If you want ONLY manual open via brand click, comment out this block.
-      if (shouldShowOverlay(ctx)) {
-        // ensure contacts are loaded (for contact line)
+      // Auto-open overlay ONLY on new Arduino-triggered active alert
+      if (shouldAutoOpenOverlay(ctx)) {
         if (!contactsCache || contactsCache.length === 0) {
           await loadContacts().catch(() => null);
         }
         fillOverlay(ctx);
         lastOverlayTokenShown = ctx.last_token;
         setOverlayOpen(true);
+      } else {
+        // If token is suppressed, keep it closed
+        const s = getSuppressedToken();
+        if (s && s === String(ctx.last_token).trim()) {
+          if (isOverlayOpen()) setOverlayOpen(false);
+        }
       }
     } catch {
       // ignore
@@ -606,10 +686,13 @@
 
   function hydrateLastTriggerFromLocalStorage() {
     if (!triggerVal) return;
-    const last = localStorage.getItem(LS_LAST_TRIGGER);
+    let last = null;
+    try {
+      last = localStorage.getItem(LS_LAST_TRIGGER);
+    } catch {}
     if (!last) return;
 
-    const cur = triggerVal.textContent.trim();
+    const cur = (triggerVal.textContent || "").trim();
     if (cur === "—" || cur === "") triggerVal.textContent = last;
   }
 
@@ -618,15 +701,16 @@
     if (!m) return;
     const token = m[1];
     const stamp = new Date().toLocaleString();
-    localStorage.setItem(LS_LAST_TRIGGER, `${token} · ${stamp}`);
+    try {
+      localStorage.setItem(LS_LAST_TRIGGER, `${token} · ${stamp}`);
+    } catch {}
   }
 
-  // ------------ Init ------------
+  // ---------------- Init ----------------
   captureTokenFromUrl();
   hydrateLastTriggerFromLocalStorage();
   applyFilters();
 
-  // load contacts on page load so list renders
   loadContacts();
 
   tryHydrateContext();
