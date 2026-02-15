@@ -1,23 +1,47 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/static/style.css">
   <title>Wellness Notes</title>
 </head>
+
 <body class="wrap">
-  <h1>Wellness Notes</h1>
-  <p class="muted">Enter PIN</p>
+  <header class="topbar">
+    <div class="brandblock">
+      <div class="brand">SousSafe</div>
+      <div class="tagline">Private Mode</div>
+    </div>
+  </header>
 
-  {% if error %}<div class="error">{{error}}</div>{% endif %}
+  <section class="panel">
+    <h2 class="sectiontitle">Wellness Notes</h2>
+    <p class="muted">Enter PIN to continue</p>
 
-  <form method="post" action="/unlock">
-    <input name="pin" type="password" minlength="4" placeholder="••••" required>
-    <button type="submit">Open</button>
-  </form>
+    {% if error %}
+      <div class="card" style="border-color: var(--danger); background: var(--dangerSoft);">
+        {{ error }}
+      </div>
+    {% endif %}
 
-  <div class="hint">
-    Demo toggles: <a href="/?mode=safe">safe</a> • <a href="/?mode=unsafe">unsafe</a>
-  </div>
+    <form method="post" action="/unlock" style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+      <input
+        name="pin"
+        type="password"
+        minlength="4"
+        placeholder="••••"
+        required
+        style="padding:12px 14px; border-radius:14px; border:1px solid var(--border); background: rgba(15,17,21,.55); color:var(--text);"
+      >
+      <button type="submit" class="btn">Open</button>
+    </form>
+
+    <div class="footnote" style="margin-top:12px;">
+      Demo toggles:
+      <a class="link" href="/?mode=safe">safe</a> •
+      <a class="link" href="/?mode=unsafe">unsafe</a>
+    </div>
+  </section>
 </body>
 </html>

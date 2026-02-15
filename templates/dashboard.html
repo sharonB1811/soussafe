@@ -1,25 +1,33 @@
+<!-- templates/dashboard.html -->
 <!doctype html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/style.css">
+  <!-- IMPORTANT: Flask serves static files from /static -->
+  <link rel="stylesheet" href="/static/style.css">
   <title>SousSafe Dashboard</title>
 </head>
+
 <body class="wrap">
   <header class="top">
     <div>
-      <!-- Make the logo clickable to toggle the hidden alert panel -->
+      <!-- Clickable brand toggles the hidden alerts panel -->
       <h1 class="brand" id="brandToggle" role="button" tabindex="0" title="Click to show/hide alerts">
         SousSafe Dashboard
       </h1>
       <p class="muted">Hidden metadata packets (judge view)</p>
+      <p class="subtle" style="margin:6px 0 0">Tip: click the title to reveal/hide the event feed.</p>
     </div>
     <a class="chip" href="/">Public App</a>
   </header>
 
-  <!-- Wrap the sensitive/judge alert content in a panel we can hide/show -->
+  <!-- Hidden by default; toggled by JS -->
   <section class="card alertpanel is-hidden" id="alertPanel">
-    <h2 class="section-title">Recent Events</h2>
+    <div class="sectionhead">
+      <h2 class="section-title">Recent Events</h2>
+      <span class="subtle">Judge-only packets</span>
+    </div>
 
     {% if alerts|length == 0 %}
       <p class="muted">No events yet. Trigger one using:</p>
@@ -69,7 +77,7 @@
     {% endif %}
   </section>
 
-  <!-- Use your existing app.js (it will handle brandToggle + alertPanel) -->
-  <script src="/app.js"></script>
+  <!-- IMPORTANT: your JS is also in /static -->
+  <script src="/static/app.js"></script>
 </body>
 </html>

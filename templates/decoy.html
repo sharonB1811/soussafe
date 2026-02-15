@@ -1,21 +1,40 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/style.css">
+  <!-- FIXED -->
+  <link rel="stylesheet" href="/static/style.css">
   <title>Notes</title>
 </head>
-<body class="wrap">
-  <h2>Notes</h2>
-  <div class="card">
-    <p><b>Today:</b> errands + cute things</p>
-    <ul>
-      <li>Grocery: milk, eggs, pasta</li>
-      <li>Valentine ideas: card, brownies ❤️</li>
-      <li>Study: review slides, finish lab</li>
-    </ul>
-  </div>
 
-  <a class="link" href="/modes">Modes</a> • <a class="link" href="/logout">Logout</a>
+<body class="wrap">
+  <header class="topbar">
+    <div class="brandblock">
+      <div class="brand">SousSafe</div>
+      <div class="tagline">Smart recipe companion</div>
+    </div>
+    <nav class="topnav">
+      <a class="chip" href="/">Home</a>
+    </nav>
+  </header>
+
+  <section class="panel">
+    <h2 class="sectiontitle">Notes</h2>
+
+    <div class="card">
+      <p><b>Today:</b> errands + cute things</p>
+      <ul>
+        <li>Grocery: milk, eggs, pasta</li>
+        <li>Valentine ideas: card, brownies ❤️</li>
+        <li>Study: review slides, finish lab</li>
+      </ul>
+    </div>
+
+    <div class="footnote">
+      <a class="link" href="/modes">Modes</a> •
+      <a class="link" href="/logout">Logout</a>
+    </div>
+  </section>
 </body>
 </html>

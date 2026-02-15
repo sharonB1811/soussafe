@@ -1,10 +1,12 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/static/style.css">
   <title>{{ recipe.title }} — SousSafe</title>
 </head>
+
 <body class="wrap">
   <header class="top">
     <div>
@@ -36,10 +38,12 @@
       <div class="seven mono">10:00</div>
       <div class="timer-sub muted small">Tap “Start” to simulate</div>
     </div>
+
     <div class="btn-row">
       <button class="btn" onclick="startTimer()">Start</button>
       <button class="btn ghost" onclick="resetTimer()">Reset</button>
     </div>
+
     <p id="boil" class="muted small"></p>
   </section>
 
@@ -61,6 +65,7 @@
       intervalId = setInterval(() => {
         seconds = Math.max(0, seconds - 1);
         render();
+
         if (seconds === 0) {
           clearInterval(intervalId);
           intervalId = null;
