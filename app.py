@@ -45,14 +45,17 @@ def db():
 def init_db():
     """
     alerts:
-      - active: 1 = current alert, 0 = resolved
+      - active: 1 = current active ALERT (only for risk >= threshold), 0 = not active/resolved/log-only
       - source_event: arduino event that caused it (optional)
+    ok_events:
+      - latest "I'm OK" events (NOT alerts)
     contacts:
       - up to MAX_CONTACTS
     """
     conn = db()
     cur = conn.cursor()
 
+    # Alerts table (active alerts only should be active=1)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,23 +69,25 @@ def init_db():
             distance_cm REAL,
             device_id TEXT NOT NULL,
             source_event TEXT,
-            active INTEGER NOT NULL DEFAULT 1
+            active INTEGER NOT NULL DEFAULT 0
         )
     """)
 
-    # Lightweight migrations for existing DBs
-    try:
-        cols = {r["name"] for r in cur.execute("PRAGMA table_info(alerts)").fetchall()}
-        if "distance_cm" not in cols:
-            cur.execute("ALTER TABLE alerts ADD COLUMN distance_cm REAL")
-        if "active" not in cols:
-            cur.execute("ALTER TABLE alerts ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
-            cur.execute("UPDATE alerts SET active = 1 WHERE active IS NULL")
-        if "source_event" not in cols:
-            cur.execute("ALTER TABLE alerts ADD COLUMN source_event TEXT")
-    except sqlite3.Error:
-        pass
+    # OK events table
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS ok_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            device_id TEXT NOT NULL,
+            distance_cm REAL,
+            prox INTEGER,
+            source_event TEXT,
+            sns_message_id TEXT
+        )
+    """)
 
+    # Contacts table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,6 +97,23 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+
+    # Lightweight migrations for existing DBs
+    try:
+        alert_cols = {r["name"] for r in cur.execute("PRAGMA table_info(alerts)").fetchall()}
+        if "distance_cm" not in alert_cols:
+            cur.execute("ALTER TABLE alerts ADD COLUMN distance_cm REAL")
+        if "active" not in alert_cols:
+            cur.execute("ALTER TABLE alerts ADD COLUMN active INTEGER NOT NULL DEFAULT 0")
+            cur.execute("UPDATE alerts SET active = 0 WHERE active IS NULL")
+        if "source_event" not in alert_cols:
+            cur.execute("ALTER TABLE alerts ADD COLUMN source_event TEXT")
+
+        ok_cols = {r["name"] for r in cur.execute("PRAGMA table_info(ok_events)").fetchall()}
+        # if ok_events table existed with older schema, you can add columns here similarly
+        _ = ok_cols
+    except sqlite3.Error:
+        pass
 
     conn.commit()
     conn.close()
@@ -182,31 +204,49 @@ def sns_subscribe_email(email: str) -> dict:
         return {"ok": False, "subscription_arn": None, "error": str(e)}
 
 
-def try_publish_sns(payload: dict) -> dict:
-    """
-    Publishes ONE notification per new active alert token (we only call this from /api/trigger).
-    Cancel/resolve does NOT publish.
-    """
+def try_publish_sns_alert(payload: dict) -> dict:
+    """Publishes an ALERT notification (risk >= threshold)."""
     if not sns_is_configured():
         return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
 
     try:
         resp = sns.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Subject=f"SousSafe alert • risk {payload.get('risk')}",
+            Subject=f"SousSafe ALERT • risk {payload.get('risk')}",
             Message=(
-                "SousSafe alert\n"
+                "SousSafe ALERT\n"
                 f"Time: {payload.get('created_at')}\n"
                 f"Device: {payload.get('device_id')}\n"
                 f"Trigger: {payload.get('trigger_type')}\n"
                 f"Risk: {payload.get('risk')}\n"
                 f"Event: {payload.get('event')}\n"
-                f"Audio: {payload.get('audio_level')}\n"
-                f"Temp: {payload.get('temp')}\n"
-                f"Humidity: {payload.get('humidity')}\n"
                 f"Distance(cm): {payload.get('distance_cm')}\n"
                 f"Token: {payload.get('token')}\n"
                 f"Link: {payload.get('public_link')}\n"
+            ),
+        )
+        return {"ok": True, "message_id": resp.get("MessageId"), "error": None}
+    except (BotoCoreError, ClientError) as e:
+        return {"ok": False, "message_id": None, "error": str(e)}
+
+
+def try_publish_sns_ok(payload: dict) -> dict:
+    """Publishes an I'M OK notification (never creates/keeps an active alert)."""
+    if not sns_is_configured():
+        return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
+
+    try:
+        resp = sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject=f"SousSafe OK • {payload.get('device_id')}",
+            Message=(
+                "SousSafe OK\n"
+                f"Time: {payload.get('created_at')}\n"
+                f"Device: {payload.get('device_id')}\n"
+                f"Event: {payload.get('event')}\n"
+                f"Distance(cm): {payload.get('distance_cm')}\n"
+                f"Proximity: {payload.get('prox')}\n"
+                f"Token: {payload.get('token')}\n"
             ),
         )
         return {"ok": True, "message_id": resp.get("MessageId"), "error": None}
@@ -301,27 +341,6 @@ RECIPES = {
         "steps": ["Mix dry", "Mix wet", "Combine", "Fold berries", "Bake", "Cool"],
     },
 }
-
-
-# ---------------- Risk scoring: Arduino is source-of-truth ----------------
-# You said: "i want the risk to be determined based on whatever arduino says"
-# Your Arduino currently doesn't send "risk" in JSON. So the next best “Arduino truth”
-# is the event type. We map Arduino event -> fixed risk (0..10).
-EVENT_RISK = {
-    "emergency_timeout": 10,
-    "emergency_touch_3tap": 10,
-    "timer_done": 6,  # make this >= threshold if you want SNS on timer finish
-    # dismiss/debug:
-    "emergency_cancel": 0,
-    "emergency_start": 0,
-    "ok_hold_5s": 0,
-}
-
-def risk_from_event(event: str) -> int:
-    e = (event or "").strip()
-    if not e:
-        return 0
-    return int(EVENT_RISK.get(e, 6))  # default mid risk if unknown event
 
 
 def recipe_for_risk(risk: int) -> str:
@@ -419,28 +438,24 @@ def api_delete_contact_route(contact_id):
         return jsonify({"ok": False, "error": "Contact not found."}), 404
 
     delete_contact(contact_id)
-
-    sns_result = None
-    if c.get("method") == "email" and sns_is_configured():
-        sns_result = {
-            "ok": True,
-            "action": "deleted",
-            "note": "Removed from app. SNS subscription may still exist unless you store SubscriptionArn per contact."
-        }
-
-    return jsonify({"ok": True, "contacts": list_contacts(), "sns": sns_result})
+    return jsonify({"ok": True, "contacts": list_contacts()})
 
 
-# --------- Live sensor/status panel ----------
+# --------- Active ALERT context (overlay should only use this) ----------
 @app.get("/api/context")
 def api_context():
+    """
+    IMPORTANT: This returns ONLY the current ACTIVE ALERT (risk >= threshold).
+    If there is no active alert, last_token is null.
+    This is what stops the overlay from popping up just because you clicked the title.
+    """
     conn = db()
     row = conn.execute("""
         SELECT * FROM alerts
-        WHERE active = 1
+        WHERE active = 1 AND risk >= ?
         ORDER BY id DESC
         LIMIT 1
-    """).fetchone()
+    """, (ALERT_THRESHOLD,)).fetchone()
     conn.close()
 
     if not row:
@@ -464,6 +479,33 @@ def api_context():
         "public_link": f"/r/{row['token']}",
         "threshold": ALERT_THRESHOLD,
         "event": row["source_event"],
+    })
+
+
+# --------- "I'm OK" latest (frontend can poll and show a toast/banner) ----------
+@app.get("/api/ok/latest")
+def api_ok_latest():
+    conn = db()
+    row = conn.execute("""
+        SELECT * FROM ok_events
+        ORDER BY id DESC
+        LIMIT 1
+    """).fetchone()
+    conn.close()
+
+    if not row:
+        return jsonify({"ok": True, "latest": None})
+
+    return jsonify({
+        "ok": True,
+        "latest": {
+            "token": row["token"],
+            "created_at": row["created_at"],
+            "device": row["device_id"],
+            "distance_cm": row["distance_cm"],
+            "prox": bool(row["prox"]) if row["prox"] is not None else None,
+            "event": row["source_event"],
+        }
     })
 
 
@@ -522,48 +564,47 @@ def api_trigger():
       {
         "device": "K01",
         "trigger": "manual"|"automatic",
+        "risk": <int 0..10>,          # Arduino truth
         "distance_cm": 12.3,
-        "audio": null,
-        "temp": null,
-        "humidity": null,
-        "event": "emergency_timeout" | "timer_done" | ...
-        OPTIONAL: "risk": <int 0..10>  # if you ever add it later
+        "prox": true|false|null,
+        "event": "emergency_touch_3tap" | "timer_done" | ...
       }
 
-    Risk source-of-truth:
-      - If payload provides "risk": use it
-      - else: derive from Arduino "event" via EVENT_RISK
+    Server behavior:
+      - We ALWAYS log it in alerts table.
+      - We set active=1 ONLY if risk >= ALERT_THRESHOLD.
+        This is what makes the overlay appear ONLY for real alerts.
     """
     data = request.get_json(force=True) or {}
 
     device_id = str(data.get("device", "K01"))
-    trigger_type = str(data.get("trigger", "manual"))
+    trigger_type = str(data.get("trigger", "manual")).strip() or "manual"
 
-    audio_level = data.get("audio")
-    temp = data.get("temp")
-    humidity = data.get("humidity")
+    # Arduino-provided truth
+    provided_risk = data.get("risk", 0)
+    try:
+        risk = int(provided_risk)
+    except Exception:
+        risk = 0
+    risk = max(0, min(risk, 10))
+
     distance_cm = data.get("distance_cm", data.get("distance"))
     event = str(data.get("event", "")).strip()
-
-    provided_risk = data.get("risk", None)
-    if provided_risk is not None:
-        try:
-            risk = int(provided_risk)
-        except Exception:
-            risk = risk_from_event(event)
-    else:
-        risk = risk_from_event(event)
-
-    risk = max(0, min(int(risk), 10))
 
     token = secrets.token_urlsafe(6)
     created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    is_active_alert = 1 if risk >= ALERT_THRESHOLD else 0
+
     conn = db()
     cur = conn.cursor()
 
-    # Make this new alert the only "active" one for this device
-    cur.execute("UPDATE alerts SET active = 0 WHERE device_id = ? AND active = 1", (device_id,))
+    # If this is an active alert, make it the only active alert for this device
+    if is_active_alert == 1:
+        cur.execute(
+            "UPDATE alerts SET active = 0 WHERE device_id = ? AND active = 1",
+            (device_id,),
+        )
 
     cur.execute("""
         INSERT INTO alerts (
@@ -571,18 +612,19 @@ def api_trigger():
           audio_level, temp, humidity, distance_cm,
           device_id, source_event, active
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         token,
         risk,
         trigger_type,
         created_at,
-        int(audio_level) if audio_level is not None else None,
-        float(temp) if temp is not None else None,
-        float(humidity) if humidity is not None else None,
+        None,  # audio_level
+        None,  # temp
+        None,  # humidity
         float(distance_cm) if distance_cm is not None else None,
         device_id,
         event if event else None,
+        is_active_alert,
     ))
 
     conn.commit()
@@ -591,17 +633,13 @@ def api_trigger():
     recipe_key = recipe_for_risk(risk)
     public_link = f"/r/{token}"
 
-    # SNS only for real alerts (>= threshold)
     sns_result = {"ok": False, "message_id": None, "error": "below threshold"}
-    if risk >= ALERT_THRESHOLD:
-        sns_result = try_publish_sns({
+    if is_active_alert == 1:
+        sns_result = try_publish_sns_alert({
             "token": token,
             "risk": risk,
             "trigger_type": trigger_type,
             "created_at": created_at,
-            "audio_level": int(audio_level) if audio_level is not None else None,
-            "temp": float(temp) if temp is not None else None,
-            "humidity": float(humidity) if humidity is not None else None,
             "distance_cm": float(distance_cm) if distance_cm is not None else None,
             "device_id": device_id,
             "public_link": public_link,
@@ -615,6 +653,78 @@ def api_trigger():
         "recipe_key": recipe_key,
         "risk": risk,
         "threshold": ALERT_THRESHOLD,
+        "event": event,
+        "active_alert": bool(is_active_alert),
+        "sns": sns_result,
+    })
+
+
+# --------- OK endpoint (bridge posts here on ok_hold_5s) ----------
+@app.post("/api/ok")
+def api_ok():
+    """
+    Bridge payload:
+      {
+        "device": "K01",
+        "event": "ok_hold_5s",
+        "distance_cm": 7.6,
+        "prox": true
+      }
+
+    Behavior:
+      - Does NOT create/keep an active alert.
+      - Logs to ok_events.
+      - Sends SNS "I'm OK" message.
+    """
+    data = request.get_json(force=True) or {}
+
+    device_id = str(data.get("device", "K01"))
+    event = str(data.get("event", "ok_hold_5s")).strip() or "ok_hold_5s"
+    distance_cm = data.get("distance_cm", data.get("distance"))
+    prox = data.get("prox", None)
+
+    prox_int = None
+    if prox is True:
+        prox_int = 1
+    elif prox is False:
+        prox_int = 0
+
+    token = secrets.token_urlsafe(6)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    sns_result = try_publish_sns_ok({
+        "token": token,
+        "created_at": created_at,
+        "device_id": device_id,
+        "distance_cm": float(distance_cm) if distance_cm is not None else None,
+        "prox": prox,
+        "event": event,
+    })
+
+    conn = db()
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO ok_events (token, created_at, device_id, distance_cm, prox, source_event, sns_message_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (
+        token,
+        created_at,
+        device_id,
+        float(distance_cm) if distance_cm is not None else None,
+        prox_int,
+        event,
+        sns_result.get("message_id"),
+    ))
+    conn.commit()
+    conn.close()
+
+    return jsonify({
+        "ok": True,
+        "token": token,
+        "created_at": created_at,
+        "device": device_id,
+        "distance_cm": float(distance_cm) if distance_cm is not None else None,
+        "prox": prox,
         "event": event,
         "sns": sns_result,
     })
@@ -635,11 +745,13 @@ def innocent(token):
 def dashboard():
     conn = db()
     alerts = conn.execute("SELECT * FROM alerts ORDER BY id DESC").fetchall()
+    ok_rows = conn.execute("SELECT * FROM ok_events ORDER BY id DESC LIMIT 10").fetchall()
     conn.close()
 
     return render_template(
         "dashboard.html",
         alerts=alerts,
+        ok_events=ok_rows,
         trusted_contact=list_contacts(),
         threshold=ALERT_THRESHOLD
     )
@@ -648,14 +760,19 @@ def dashboard():
 @app.get("/dev/fire")
 def dev_fire():
     return jsonify({
-        "tip": "Use curl to trigger events. Example:",
-        "curl": """curl -X POST http://127.0.0.1:5050/api/trigger \\
+        "tip": "Use curl to trigger events. Examples:",
+        "trigger_alert": """curl -X POST http://127.0.0.1:5050/api/trigger \\
   -H "Content-Type: application/json" \\
-  -d '{"trigger":"manual","event":"timer_done","distance_cm":12,"device":"K01"}'"""
+  -d '{"device":"K01","trigger":"manual","event":"emergency_touch_3tap","risk":9,"distance_cm":8.1,"prox":true}'""",
+        "ok": """curl -X POST http://127.0.0.1:5050/api/ok \\
+  -H "Content-Type: application/json" \\
+  -d '{"device":"K01","event":"ok_hold_5s","distance_cm":7.6,"prox":true}'""",
+        "resolve": """curl -X POST http://127.0.0.1:5050/api/resolve \\
+  -H "Content-Type: application/json" \\
+  -d '{"device":"K01"}'""",
     })
 
 
 if __name__ == "__main__":
     init_db()
     app.run(host="0.0.0.0", port=5050, debug=True)
-

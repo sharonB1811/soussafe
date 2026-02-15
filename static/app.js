@@ -1,11 +1,12 @@
 // static/app.js
 // SousSafe behavior (home + dashboard)
 //
-// Requirements you asked for:
-// - Overlay shows ONLY when Arduino triggers an ACTIVE alert on the server (/api/context has last_token).
-// - Clicking SousSafe title should NOT show alert unless there's an active alert already.
-// - Dismiss via website OR Arduino cancel must make alert disappear (server-side resolve).
-// - Race-proof: don't re-open the same token while resolve is in-flight.
+// Your requirements:
+// 1) Alert overlay shows ONLY when Arduino triggers an ACTIVE alert on the server (/api/context has last_token).
+// 2) Clicking SousSafe title should NOT force-show any alert; it can only open overlay if an active alert exists.
+// 3) Dismiss via website OR Arduino cancel must make alert disappear (server-side resolve).
+// 4) "I'm OK" (touch held 5s) should show on the frontend (poll /api/ok/latest).
+// 5) Race-proof: don't re-open same token while resolve is in-flight.
 
 (function () {
   // ---------------- Shared utils ----------------
@@ -43,6 +44,7 @@
   }
 
   function fmtTime(ts) {
+    // backend sends "YYYY-MM-DD HH:MM:SS"
     if (!ts || typeof ts !== "string") return "";
     const m = ts.match(/\s(\d{2}:\d{2})/);
     return m ? m[1] : ts;
@@ -68,7 +70,6 @@
   }
 
   // ---------------- Dashboard toggle (brand click) ----------------
-  // (Dashboard page can still toggle alert panel visibility)
   (function initDashboardToggle() {
     const brandToggle = document.getElementById("brandToggle");
     const alertPanel = document.getElementById("alertPanel");
@@ -125,6 +126,10 @@
   const distanceVal = document.getElementById("distanceVal");
   const audioVal = document.getElementById("audioVal");
 
+  // NEW: "I'm OK" status element (optional in HTML)
+  // If you don't have it, this script will create a small badge under the status rows.
+  let okVal = document.getElementById("okVal");
+
   // ---------------- Contact elements ----------------
   const contactForm = document.getElementById("contactForm");
   const contactName = document.getElementById("contactName");
@@ -154,6 +159,7 @@
 
   const LS_LAST_TRIGGER = "soussafe:lastTrigger";
   const LS_SUPPRESSED_TOKEN = "soussafe:suppressedToken"; // token suppressed until server clears it
+  const LS_LAST_OK_TOKEN = "soussafe:lastOkToken"; // dedupe frontend "ok" display
 
   // Contacts cache
   let contactsCache = [];
@@ -538,21 +544,18 @@
   }
 
   async function dismissOverlay() {
-    // Close immediately, but also clear server-side so it stays gone.
     const token = lastCtx && tokenIsReal(lastCtx.last_token) ? String(lastCtx.last_token).trim() : null;
 
     if (token) {
-      setSuppressedToken(token);      // prevents re-open while DB/poll catches up
-      lastOverlayTokenShown = token;  // prevents immediate auto-open loop
+      setSuppressedToken(token); // prevents re-open while DB/poll catches up
+      lastOverlayTokenShown = token;
       await resolveServerSide(token, null);
     }
 
     setOverlayOpen(false);
   }
 
-  if (alertDismissBtn) {
-    alertDismissBtn.addEventListener("click", dismissOverlay);
-  }
+  if (alertDismissBtn) alertDismissBtn.addEventListener("click", dismissOverlay);
 
   if (overlay) {
     overlay.addEventListener("click", (e) => {
@@ -564,9 +567,8 @@
   }
 
   // ---------------- Title click on HOME ----------------
-  // IMPORTANT CHANGE:
-  // Clicking brand does NOT "manual reveal" alerts.
-  // It only toggles visibility if an alert is currently active.
+  // Clicking brand does NOT force-show anything.
+  // It only opens overlay if there is an active alert RIGHT NOW.
   async function onBrandClickHome() {
     if (!overlay) return;
 
@@ -575,25 +577,17 @@
       return;
     }
 
-    // Only open overlay if server has an active alert right now
     let ctx = null;
     try {
       const res = await fetch("/api/context", { cache: "no-store" });
       if (res.ok) ctx = await res.json();
     } catch {}
 
-    if (!ctx || ctx.ok !== true || !tokenIsReal(ctx.last_token)) {
-      // No active alert -> do nothing
-      return;
-    }
+    if (!ctx || ctx.ok !== true || !tokenIsReal(ctx.last_token)) return;
 
-    // If it's currently being cleared, also do nothing
     const suppressed = getSuppressedToken();
-    if (suppressed && suppressed === String(ctx.last_token).trim()) {
-      return;
-    }
+    if (suppressed && suppressed === String(ctx.last_token).trim()) return;
 
-    // Optionally load contacts for display
     if (!contactsCache || contactsCache.length === 0) {
       await loadContacts().catch(() => null);
     }
@@ -614,6 +608,97 @@
     });
   }
 
+  // ---------------- "I'm OK" UI ----------------
+  function ensureOkUI() {
+    if (okVal) return okVal;
+
+    // Try to place under the status list if possible
+    const anchor =
+      document.getElementById("statusPanel") ||
+      document.getElementById("statusCard") ||
+      (triggerVal ? triggerVal.parentElement : null) ||
+      grid.parentElement;
+
+    const el = document.createElement("div");
+    el.id = "okVal";
+    el.style.marginTop = "10px";
+    el.style.display = "none";
+    el.style.padding = "10px 12px";
+    el.style.borderRadius = "12px";
+    el.style.border = "1px solid rgba(255,255,255,.10)";
+    el.style.background = "rgba(255,255,255,.06)";
+    el.style.fontSize = ".92rem";
+    el.innerHTML = `<span class="mono">I’m OK</span> <span class="subtle" id="okValTime"></span>`;
+
+    if (anchor && anchor.parentNode) {
+      anchor.parentNode.insertBefore(el, anchor.nextSibling);
+    } else {
+      document.body.appendChild(el);
+    }
+
+    okVal = el;
+    return okVal;
+  }
+
+  function setOkBanner(latest) {
+    const el = ensureOkUI();
+    const timeEl = el.querySelector("#okValTime");
+
+    if (!latest) {
+      el.style.display = "none";
+      return;
+    }
+
+    const when = latest.created_at ? fmtTime(latest.created_at) : "";
+    const device = latest.device ? String(latest.device) : "";
+    const dist = latest.distance_cm != null ? `${Math.round(Number(latest.distance_cm))}cm` : "";
+    const suffix = [when && `• ${when}`, device && `• ${device}`, dist && `• ${dist}`].filter(Boolean).join(" ");
+
+    if (timeEl) timeEl.textContent = suffix ? ` ${suffix}` : "";
+    el.style.display = "block";
+
+    // Auto-hide after a bit (doesn't affect DB)
+    window.clearTimeout(setOkBanner._t);
+    setOkBanner._t = window.setTimeout(() => {
+      el.style.display = "none";
+    }, 12000);
+  }
+
+  function getLastOkToken() {
+    try {
+      return localStorage.getItem(LS_LAST_OK_TOKEN);
+    } catch {
+      return null;
+    }
+  }
+
+  function setLastOkToken(tok) {
+    try {
+      if (tokenIsReal(tok)) localStorage.setItem(LS_LAST_OK_TOKEN, String(tok).trim());
+    } catch {}
+  }
+
+  async function pollOkLatest() {
+    try {
+      const res = await fetch("/api/ok/latest", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data || data.ok !== true) return;
+
+      const latest = data.latest;
+      if (!latest || !tokenIsReal(latest.token)) return;
+
+      // Show only once per ok token
+      const lastTok = getLastOkToken();
+      if (lastTok && lastTok === String(latest.token).trim()) return;
+
+      setLastOkToken(latest.token);
+      setOkBanner(latest);
+    } catch {
+      // ignore
+    }
+  }
+
   // ---------------- Status hydration from /api/context ----------------
   async function tryHydrateContext() {
     try {
@@ -625,19 +710,18 @@
 
       lastCtx = ctx;
 
-      // When server reports "no active alert", clear everything (this handles Arduino cancel too)
+      // No active alert -> clear alert UI (also handles Arduino cancel)
       if (!tokenIsReal(ctx.last_token)) {
         if (kitchenVal) kitchenVal.textContent = "—";
         if (distanceVal) distanceVal.textContent = "—";
         if (audioVal) audioVal.textContent = "—";
         if (triggerVal) triggerVal.textContent = "—";
         setHeatStageFromRisk(0);
-
         clearActiveAlertUI();
         return;
       }
 
-      // If active token changed, drop any old suppression
+      // Token changed -> drop suppression for old token
       const suppressed = getSuppressedToken();
       if (suppressed && suppressed !== String(ctx.last_token).trim()) {
         clearSuppressedToken();
@@ -673,7 +757,7 @@
         lastOverlayTokenShown = ctx.last_token;
         setOverlayOpen(true);
       } else {
-        // If token is suppressed, keep it closed
+        // If suppressed, keep it closed
         const s = getSuppressedToken();
         if (s && s === String(ctx.last_token).trim()) {
           if (isOverlayOpen()) setOverlayOpen(false);
@@ -713,7 +797,10 @@
 
   loadContacts();
 
+  // Poll active alerts + OK events
   tryHydrateContext();
-  setInterval(tryHydrateContext, 2500);
-})();
+  pollOkLatest();
 
+  setInterval(tryHydrateContext, 2500);
+  setInterval(pollOkLatest, 2500);
+})();
