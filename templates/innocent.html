@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>SousSafe Tip</title>
+</head>
+<body class="wrap">
+  <header class="top">
+    <div>
+      <h1 class="brand">SousSafe Tip <span class="emoji">✨</span></h1>
+      <p class="muted">Saved cooking tip</p>
+    </div>
+    <a class="chip" href="/">Recipes</a>
+  </header>
+
+  <section class="card">
+    <h2 class="section-title">{{ recipe.title }}</h2>
+    <div class="tip">
+      <p><b>Tip:</b> Add a splash of pasta water (or broth) to emulsify sauces and deepen flavor.</p>
+      <p class="muted small">This page is intentionally simple and “normal-looking.”</p>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 class="section-title">Quick Steps</h2>
+    <ol class="steps compact">
+      {% for s in recipe.steps[:4] %}
+        <li class="step">
+          <div class="step-num mono">{{ loop.index }}</div>
+          <div class="step-text">{{ s }}</div>
+        </li>
+      {% endfor %}
+    </ol>
+    <p class="muted small">Want the full recipe? Open SousSafe.</p>
+  </section>
+
+  <footer class="foot muted small">
+    “This garlic pasta recipe is amazing 🍝”
+  </footer>
+</body>
+</html>

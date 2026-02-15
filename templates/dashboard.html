@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>SousSafe Dashboard</title>
+</head>
+<body class="wrap">
+  <header class="top">
+    <div>
+      <!-- Make the logo clickable to toggle the hidden alert panel -->
+      <h1 class="brand" id="brandToggle" role="button" tabindex="0" title="Click to show/hide alerts">
+        SousSafe Dashboard
+      </h1>
+      <p class="muted">Hidden metadata packets (judge view)</p>
+    </div>
+    <a class="chip" href="/">Public App</a>
+  </header>
+
+  <!-- Wrap the sensitive/judge alert content in a panel we can hide/show -->
+  <section class="card alertpanel is-hidden" id="alertPanel">
+    <h2 class="section-title">Recent Events</h2>
+
+    {% if alerts|length == 0 %}
+      <p class="muted">No events yet. Trigger one using:</p>
+      <pre class="code mono">curl -X POST http://127.0.0.1:5050/api/trigger \
+  -H "Content-Type: application/json" \
+  -d '{"trigger":"automatic","audio":92,"temp":78,"humidity":45,"device":"K01"}'</pre>
+    {% else %}
+      <div class="events">
+        {% for a in alerts %}
+          <div class="event">
+            <div class="event-head">
+              <div>
+                <div class="token mono">Token: {{ a["token"] }}</div>
+                <div class="muted small">Created: {{ a["created_at"] }} · Device: {{ a["device_id"] }}</div>
+              </div>
+              <div class="risk">
+                <div class="risk-num mono">{{ a["risk"] }}</div>
+                <div class="risk-sub muted small">risk</div>
+              </div>
+            </div>
+
+            <div class="event-body">
+              <div class="kv">
+                <div class="k muted">Trigger</div>
+                <div class="v">{{ a["trigger_type"] }}</div>
+              </div>
+              <div class="kv">
+                <div class="k muted">Audio</div>
+                <div class="v mono">{{ a["audio_level"] if a["audio_level"] is not none else "—" }}</div>
+              </div>
+              <div class="kv">
+                <div class="k muted">Temp</div>
+                <div class="v mono">{{ a["temp"] if a["temp"] is not none else "—" }}</div>
+              </div>
+              <div class="kv">
+                <div class="k muted">Humidity</div>
+                <div class="v mono">{{ a["humidity"] if a["humidity"] is not none else "—" }}</div>
+              </div>
+              <div class="kv">
+                <div class="k muted">Innocent Link</div>
+                <div class="v"><a class="link" href="/r/{{ a['token'] }}">/r/{{ a["token"] }}</a></div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- Use your existing app.js (it will handle brandToggle + alertPanel) -->
+  <script src="/app.js"></script>
+</body>
+</html>

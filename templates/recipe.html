@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>{{ recipe.title }} — SousSafe</title>
+</head>
+<body class="wrap">
+  <header class="top">
+    <div>
+      <a class="back" href="/">← Recipes</a>
+      <h1 class="brand">{{ recipe.title }}</h1>
+      <p class="muted">Demo UI</p>
+    </div>
+    <div class="heat-pill">
+      <span class="dot yellow"></span>
+      <span>Simmer</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2 class="section-title">Steps</h2>
+    <ol class="steps">
+      {% for s in recipe.steps %}
+        <li class="step">
+          <div class="step-num mono">{{ loop.index }}</div>
+          <div class="step-text">{{ s }}</div>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2 class="section-title">Timer</h2>
+    <div class="timer">
+      <div class="seven mono">10:00</div>
+      <div class="timer-sub muted small">Tap “Start” to simulate</div>
+    </div>
+    <div class="btn-row">
+      <button class="btn" onclick="startTimer()">Start</button>
+      <button class="btn ghost" onclick="resetTimer()">Reset</button>
+    </div>
+    <p id="boil" class="muted small"></p>
+  </section>
+
+  <script>
+    // Simple UI-only timer (no sensors yet).
+    let intervalId = null;
+    let seconds = 600;
+
+    function render() {
+      const m = String(Math.floor(seconds / 60)).padStart(2, "0");
+      const s = String(seconds % 60).padStart(2, "0");
+      document.querySelector(".seven").textContent = `${m}:${s}`;
+    }
+
+    function startTimer() {
+      if (intervalId) return;
+      document.getElementById("boil").textContent = "Listening… (demo)";
+
+      intervalId = setInterval(() => {
+        seconds = Math.max(0, seconds - 1);
+        render();
+        if (seconds === 0) {
+          clearInterval(intervalId);
+          intervalId = null;
+          document.getElementById("boil").textContent = "Timer done. Beep! (demo)";
+        }
+      }, 1000);
+    }
+
+    function resetTimer() {
+      clearInterval(intervalId);
+      intervalId = null;
+      seconds = 600;
+      render();
+      document.getElementById("boil").textContent = "";
+    }
+
+    render();
+  </script>
+</body>
+</html>

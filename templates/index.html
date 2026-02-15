@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>Wellness Notes</title>
+</head>
+<body class="wrap">
+  <h1>Wellness Notes</h1>
+  <p class="muted">Enter PIN</p>
+
+  {% if error %}<div class="error">{{error}}</div>{% endif %}
+
+  <form method="post" action="/unlock">
+    <input name="pin" type="password" minlength="4" placeholder="••••" required>
+    <button type="submit">Open</button>
+  </form>
+
+  <div class="hint">
+    Demo toggles: <a href="/?mode=safe">safe</a> • <a href="/?mode=unsafe">unsafe</a>
+  </div>
+</body>
+</html>

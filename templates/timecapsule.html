@@ -1,0 +1,20 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>{{mode}}</title>
+</head>
+<body class="wrap">
+  {% if mode == "breathing" %}
+    <h2>Guided Breathing</h2>
+    <div class="breath"></div>
+    <p class="muted">In… 5 seconds • Out… 5 seconds</p>
+  {% else %}
+    <h2>Sleep Companion</h2>
+    <div class="sleepglow"></div>
+    <p class="muted">Dim glow • steady pace</p>
+  {% endif %}
+  <a class="link" href="/modes">Back</a>
+</body>
+</html>

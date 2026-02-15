@@ -1,0 +1,50 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <link rel="stylesheet" href="/style.css">
+  <title>Modes</title>
+</head>
+<body class="wrap">
+  <h2>Modes</h2>
+
+  {% if anniversary_today %}
+    <div class="banner">Today might feel heavier. I’m here.</div>
+  {% endif %}
+
+  <div class="grid">
+    <a class="card linkblock" href="/breathing">Guided Breathing</a>
+    <a class="card linkblock" href="/sleep">Sleep Companion</a>
+  </div>
+
+  <h3>Anniversary Radar</h3>
+  <form method="post" action="/add_date" class="row">
+    <input name="label" placeholder="Label (e.g., Anniversary)" required>
+    <input name="day" type="date" required>
+    <button>Add</button>
+  </form>
+
+  <ul class="list">
+    {% for d in dates %}
+      <li>{{d["day"]}} — {{d["label"]}}</li>
+    {% endfor %}
+    {% if dates|length == 0 %}<li class="muted">No dates yet.</li>{% endif %}
+  </ul>
+
+  <h3>Time Capsule</h3>
+  <form method="post" action="/add_capsule">
+    <input name="unlock_date" type="date" required>
+    <textarea name="message" placeholder="Message to future you..." required></textarea>
+    <button>Seal Capsule</button>
+  </form>
+
+  <ul class="list">
+    {% for c in capsules %}
+      <li><b>{{c["unlock_date"]}}</b> — {{c["message"][:40]}}{% if c["message"]|length>40 %}…{% endif %}</li>
+    {% endfor %}
+    {% if capsules|length == 0 %}<li class="muted">No capsules yet.</li>{% endif %}
+  </ul>
+
+  <a class="link" href="/vault">Back</a>
+</body>
+</html>
