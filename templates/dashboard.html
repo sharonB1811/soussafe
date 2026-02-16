@@ -1,10 +1,8 @@
-<!-- templates/dashboard.html -->
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <!-- IMPORTANT: Flask serves static files from /static -->
   <link rel="stylesheet" href="/static/style.css">
   <title>SousSafe Dashboard</title>
 </head>
@@ -12,7 +10,6 @@
 <body class="wrap">
   <header class="top">
     <div>
-      <!-- Clickable brand toggles the hidden alerts panel -->
       <h1 class="brand" id="brandToggle" role="button" tabindex="0" title="Click to show/hide alerts">
         SousSafe Dashboard
       </h1>
@@ -22,7 +19,6 @@
     <a class="chip" href="/">Public App</a>
   </header>
 
-  <!-- Hidden by default; toggled by JS -->
   <section class="card alertpanel is-hidden" id="alertPanel">
     <div class="sectionhead">
       <h2 class="section-title">Recent Events</h2>
@@ -77,7 +73,6 @@
     {% endif %}
   </section>
 
-  <!-- IMPORTANT: your JS is also in /static -->
   <script src="/static/app.js"></script>
 </body>
 </html>
