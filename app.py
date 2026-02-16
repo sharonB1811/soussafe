@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, render_template, request, redirect, url_for, jsonify
 import sqlite3
 import secrets
@@ -13,7 +12,6 @@ app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-change-me")
 
 DB = os.getenv("SOUSSAFE_DB", "soussafe.db")
 
-# ---------------- AWS (SNS) ----------------
 SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN", "PASTE_YOUR_TOPIC_ARN_HERE")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 ALERT_THRESHOLD = int(os.getenv("ALERT_THRESHOLD", "6"))
@@ -22,12 +20,10 @@ sns = boto3.client("sns", region_name=AWS_REGION)
 
 MAX_CONTACTS = 3
 
-# ---------------- Image helper ----------------
 IMAGE_DIR = os.path.join(app.root_path, "static", "images")
 
 
 def image_url(stem: str) -> str:
-    """Return /static/images/<stem>.(jpg|jpeg|png|webp) based on what exists."""
     for ext in ("jpg", "jpeg", "png", "webp"):
         p = os.path.join(IMAGE_DIR, f"{stem}.{ext}")
         if os.path.exists(p):
@@ -35,7 +31,6 @@ def image_url(stem: str) -> str:
     return f"/static/images/{stem}.jpg"
 
 
-# ---------------- DB helpers ----------------
 def db():
     conn = sqlite3.connect(DB)
     conn.row_factory = sqlite3.Row
@@ -43,19 +38,9 @@ def db():
 
 
 def init_db():
-    """
-    alerts:
-      - active: 1 = current active ALERT (only for risk >= threshold), 0 = not active/resolved/log-only
-      - source_event: arduino event that caused it (optional)
-    ok_events:
-      - latest "I'm OK" events (NOT alerts)
-    contacts:
-      - up to MAX_CONTACTS
-    """
     conn = db()
     cur = conn.cursor()
 
-    # Alerts table (active alerts only should be active=1)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +58,6 @@ def init_db():
         )
     """)
 
-    # OK events table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS ok_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +71,6 @@ def init_db():
         )
     """)
 
-    # Contacts table
     cur.execute("""
         CREATE TABLE IF NOT EXISTS contacts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,7 +81,6 @@ def init_db():
         )
     """)
 
-    # Lightweight migrations for existing DBs
     try:
         alert_cols = {r["name"] for r in cur.execute("PRAGMA table_info(alerts)").fetchall()}
         if "distance_cm" not in alert_cols:
@@ -110,7 +92,6 @@ def init_db():
             cur.execute("ALTER TABLE alerts ADD COLUMN source_event TEXT")
 
         ok_cols = {r["name"] for r in cur.execute("PRAGMA table_info(ok_events)").fetchall()}
-        # if ok_events table existed with older schema, you can add columns here similarly
         _ = ok_cols
     except sqlite3.Error:
         pass
@@ -119,7 +100,6 @@ def init_db():
     conn.close()
 
 
-# ---------------- Contacts helpers ----------------
 def list_contacts():
     conn = db()
     rows = conn.execute("""
@@ -182,7 +162,6 @@ def delete_contact(contact_id: int) -> bool:
     return deleted
 
 
-# ---------------- SNS helpers ----------------
 def sns_is_configured() -> bool:
     return bool(SNS_TOPIC_ARN) and SNS_TOPIC_ARN != "PASTE_YOUR_TOPIC_ARN_HERE"
 
@@ -205,7 +184,6 @@ def sns_subscribe_email(email: str) -> dict:
 
 
 def try_publish_sns_alert(payload: dict) -> dict:
-    """Publishes an ALERT notification (risk >= threshold)."""
     if not sns_is_configured():
         return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
 
@@ -231,7 +209,6 @@ def try_publish_sns_alert(payload: dict) -> dict:
 
 
 def try_publish_sns_ok(payload: dict) -> dict:
-    """Publishes an I'M OK notification (never creates/keeps an active alert)."""
     if not sns_is_configured():
         return {"ok": False, "message_id": None, "error": "SNS_TOPIC_ARN not set"}
 
@@ -254,7 +231,6 @@ def try_publish_sns_ok(payload: dict) -> dict:
         return {"ok": False, "message_id": None, "error": str(e)}
 
 
-# ---------------- Public Recipe Data ----------------
 RECIPES = {
     "garlicpasta": {
         "title": "Garlic Pasta 🍝",
@@ -353,7 +329,6 @@ def recipe_for_risk(risk: int) -> str:
     return "garlicpasta"
 
 
-# ---------------- Routes ----------------
 @app.get("/")
 def home():
     recipe_list = [
@@ -374,7 +349,6 @@ def recipe(key):
     return render_template("recipe.html", recipe=RECIPES[key], key=key)
 
 
-# --------- Contacts API (max 3) ----------
 @app.get("/api/contact")
 def api_get_contacts():
     sns_state = {
@@ -441,14 +415,8 @@ def api_delete_contact_route(contact_id):
     return jsonify({"ok": True, "contacts": list_contacts()})
 
 
-# --------- Active ALERT context (overlay should only use this) ----------
 @app.get("/api/context")
 def api_context():
-    """
-    IMPORTANT: This returns ONLY the current ACTIVE ALERT (risk >= threshold).
-    If there is no active alert, last_token is null.
-    This is what stops the overlay from popping up just because you clicked the title.
-    """
     conn = db()
     row = conn.execute("""
         SELECT * FROM alerts
@@ -482,7 +450,6 @@ def api_context():
     })
 
 
-# --------- "I'm OK" latest (frontend can poll and show a toast/banner) ----------
 @app.get("/api/ok/latest")
 def api_ok_latest():
     conn = db()
@@ -509,12 +476,11 @@ def api_ok_latest():
     })
 
 
-# --------- Resolve endpoint (bridge/app posts here on cancel/dismiss) ----------
 @app.post("/api/resolve")
 def api_resolve():
     data = request.get_json(silent=True) or {}
-    device_id = data.get("device")  # optional
-    token = data.get("token")       # optional
+    device_id = data.get("device")
+    token = data.get("token")
 
     conn = db()
     cur = conn.cursor()
@@ -556,31 +522,13 @@ def api_resolve():
     return jsonify({"ok": True, "cleared": True, "token": cleared_token})
 
 
-# --------- Trigger endpoint (bridge posts here) ----------
 @app.post("/api/trigger")
 def api_trigger():
-    """
-    Expects bridge.py payload like:
-      {
-        "device": "K01",
-        "trigger": "manual"|"automatic",
-        "risk": <int 0..10>,          # Arduino truth
-        "distance_cm": 12.3,
-        "prox": true|false|null,
-        "event": "emergency_touch_3tap" | "timer_done" | ...
-      }
-
-    Server behavior:
-      - We ALWAYS log it in alerts table.
-      - We set active=1 ONLY if risk >= ALERT_THRESHOLD.
-        This is what makes the overlay appear ONLY for real alerts.
-    """
     data = request.get_json(force=True) or {}
 
     device_id = str(data.get("device", "K01"))
     trigger_type = str(data.get("trigger", "manual")).strip() or "manual"
 
-    # Arduino-provided truth
     provided_risk = data.get("risk", 0)
     try:
         risk = int(provided_risk)
@@ -599,7 +547,6 @@ def api_trigger():
     conn = db()
     cur = conn.cursor()
 
-    # If this is an active alert, make it the only active alert for this device
     if is_active_alert == 1:
         cur.execute(
             "UPDATE alerts SET active = 0 WHERE device_id = ? AND active = 1",
@@ -618,9 +565,9 @@ def api_trigger():
         risk,
         trigger_type,
         created_at,
-        None,  # audio_level
-        None,  # temp
-        None,  # humidity
+        None,
+        None,
+        None,
         float(distance_cm) if distance_cm is not None else None,
         device_id,
         event if event else None,
@@ -659,23 +606,8 @@ def api_trigger():
     })
 
 
-# --------- OK endpoint (bridge posts here on ok_hold_5s) ----------
 @app.post("/api/ok")
 def api_ok():
-    """
-    Bridge payload:
-      {
-        "device": "K01",
-        "event": "ok_hold_5s",
-        "distance_cm": 7.6,
-        "prox": true
-      }
-
-    Behavior:
-      - Does NOT create/keep an active alert.
-      - Logs to ok_events.
-      - Sends SNS "I'm OK" message.
-    """
     data = request.get_json(force=True) or {}
 
     device_id = str(data.get("device", "K01"))

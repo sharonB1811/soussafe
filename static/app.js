@@ -1,15 +1,4 @@
-// static/app.js
-// SousSafe behavior (home + dashboard)
-//
-// Your requirements:
-// 1) Alert overlay shows ONLY when Arduino triggers an ACTIVE alert on the server (/api/context has last_token).
-// 2) Clicking SousSafe title should NOT force-show any alert; it can only open overlay if an active alert exists.
-// 3) Dismiss via website OR Arduino cancel must make alert disappear (server-side resolve).
-// 4) "I'm OK" (touch held 5s) should show on the frontend (poll /api/ok/latest).
-// 5) Race-proof: don't re-open same token while resolve is in-flight.
-
 (function () {
-  // ---------------- Shared utils ----------------
   function norm(s) {
     return (s || "").toString().trim().toLowerCase();
   }
@@ -44,7 +33,6 @@
   }
 
   function fmtTime(ts) {
-    // backend sends "YYYY-MM-DD HH:MM:SS"
     if (!ts || typeof ts !== "string") return "";
     const m = ts.match(/\s(\d{2}:\d{2})/);
     return m ? m[1] : ts;
@@ -69,7 +57,6 @@
     return true;
   }
 
-  // ---------------- Dashboard toggle (brand click) ----------------
   (function initDashboardToggle() {
     const brandToggle = document.getElementById("brandToggle");
     const alertPanel = document.getElementById("alertPanel");
@@ -108,17 +95,14 @@
     });
   })();
 
-  // ---------------- Home behavior (requires recipeGrid) ----------------
   const grid = document.getElementById("recipeGrid");
   if (!grid) return;
 
-  // ---------------- Recipe search/filter ----------------
   const cards = Array.from(grid.querySelectorAll(".productcard"));
   const searchInput = document.getElementById("recipeSearch");
   const filtersEl = document.getElementById("filters");
   const resultCountEl = document.getElementById("resultCount");
 
-  // ---------------- Status elements ----------------
   const timerVal = document.getElementById("timerVal");
   const kitchenVal = document.getElementById("kitchenVal");
   const heatVal = document.getElementById("heatVal");
@@ -126,18 +110,14 @@
   const distanceVal = document.getElementById("distanceVal");
   const audioVal = document.getElementById("audioVal");
 
-  // NEW: "I'm OK" status element (optional in HTML)
-  // If you don't have it, this script will create a small badge under the status rows.
   let okVal = document.getElementById("okVal");
 
-  // ---------------- Contact elements ----------------
   const contactForm = document.getElementById("contactForm");
   const contactName = document.getElementById("contactName");
   const contactMethod = document.getElementById("contactMethod");
   const contactValue = document.getElementById("contactValue");
   const contactStatus = document.getElementById("contactStatus");
 
-  // ---------------- Overlay elements ----------------
   const overlay = document.getElementById("alertOverlay");
   const alertDismissBtn = document.getElementById("alertDismissBtn");
   const alertOpenLinkBtn = document.getElementById("alertOpenLinkBtn");
@@ -150,22 +130,18 @@
   const alertTokenVal = document.getElementById("alertTokenVal");
   const alertContactLine = document.getElementById("alertContactLine");
 
-  // Home brand click
   const brandToggleHome = document.getElementById("brandToggle");
 
-  // ---------------- State ----------------
   let lastCtx = null;
   let lastOverlayTokenShown = null;
 
   const LS_LAST_TRIGGER = "soussafe:lastTrigger";
-  const LS_SUPPRESSED_TOKEN = "soussafe:suppressedToken"; // token suppressed until server clears it
-  const LS_LAST_OK_TOKEN = "soussafe:lastOkToken"; // dedupe frontend "ok" display
+  const LS_SUPPRESSED_TOKEN = "soussafe:suppressedToken";
+  const LS_LAST_OK_TOKEN = "soussafe:lastOkToken";
 
-  // Contacts cache
   let contactsCache = [];
   let contactsMax = 3;
 
-  // ---------------- Recipe helpers ----------------
   function getCardTags(card) {
     const raw = norm(card.getAttribute("data-tags") || card.getAttribute("data-tag"));
     const parts = raw.split(/\s+/).filter(Boolean);
@@ -234,7 +210,6 @@
     });
   }
 
-  // ---------------- Status helpers ----------------
   function setHeatStageFromRisk(risk) {
     if (!heatVal) return;
     const r = safeNum(risk) ?? 0;
@@ -345,7 +320,6 @@
     }
   }
 
-  // Auto-open ONLY from server active alert + meets threshold + not suppressed
   function shouldAutoOpenOverlay(ctx) {
     if (!overlay) return false;
     if (!ctx || ctx.ok !== true) return false;
@@ -356,7 +330,6 @@
     if (threshold === null) return false;
     if (risk < threshold) return false;
 
-    // don't re-open same token over and over
     if (lastOverlayTokenShown === ctx.last_token) return false;
 
     const suppressed = getSuppressedToken();
@@ -365,7 +338,6 @@
     return true;
   }
 
-  // ---------------- Contacts: load / render / add / delete ----------------
   function ensureContactsListUI() {
     if (!contactForm) return null;
 
@@ -529,7 +501,6 @@
     });
   }
 
-  // ---------------- Overlay dismiss (server resolve) ----------------
   async function resolveServerSide(token, device) {
     try {
       await fetch("/api/resolve", {
@@ -547,7 +518,7 @@
     const token = lastCtx && tokenIsReal(lastCtx.last_token) ? String(lastCtx.last_token).trim() : null;
 
     if (token) {
-      setSuppressedToken(token); // prevents re-open while DB/poll catches up
+      setSuppressedToken(token);
       lastOverlayTokenShown = token;
       await resolveServerSide(token, null);
     }
@@ -566,9 +537,6 @@
     });
   }
 
-  // ---------------- Title click on HOME ----------------
-  // Clicking brand does NOT force-show anything.
-  // It only opens overlay if there is an active alert RIGHT NOW.
   async function onBrandClickHome() {
     if (!overlay) return;
 
@@ -608,11 +576,9 @@
     });
   }
 
-  // ---------------- "I'm OK" UI ----------------
   function ensureOkUI() {
     if (okVal) return okVal;
 
-    // Try to place under the status list if possible
     const anchor =
       document.getElementById("statusPanel") ||
       document.getElementById("statusCard") ||
@@ -657,7 +623,6 @@
     if (timeEl) timeEl.textContent = suffix ? ` ${suffix}` : "";
     el.style.display = "block";
 
-    // Auto-hide after a bit (doesn't affect DB)
     window.clearTimeout(setOkBanner._t);
     setOkBanner._t = window.setTimeout(() => {
       el.style.display = "none";
@@ -688,18 +653,14 @@
       const latest = data.latest;
       if (!latest || !tokenIsReal(latest.token)) return;
 
-      // Show only once per ok token
       const lastTok = getLastOkToken();
       if (lastTok && lastTok === String(latest.token).trim()) return;
 
       setLastOkToken(latest.token);
       setOkBanner(latest);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
-  // ---------------- Status hydration from /api/context ----------------
   async function tryHydrateContext() {
     try {
       const res = await fetch("/api/context", { cache: "no-store" });
@@ -710,7 +671,6 @@
 
       lastCtx = ctx;
 
-      // No active alert -> clear alert UI (also handles Arduino cancel)
       if (!tokenIsReal(ctx.last_token)) {
         if (kitchenVal) kitchenVal.textContent = "—";
         if (distanceVal) distanceVal.textContent = "—";
@@ -721,7 +681,6 @@
         return;
       }
 
-      // Token changed -> drop suppression for old token
       const suppressed = getSuppressedToken();
       if (suppressed && suppressed !== String(ctx.last_token).trim()) {
         clearSuppressedToken();
@@ -748,7 +707,6 @@
         localStorage.setItem(LS_LAST_TRIGGER, `${ctx.last_token} · ${stamp}`);
       } catch {}
 
-      // Auto-open overlay ONLY on new Arduino-triggered active alert
       if (shouldAutoOpenOverlay(ctx)) {
         if (!contactsCache || contactsCache.length === 0) {
           await loadContacts().catch(() => null);
@@ -757,15 +715,12 @@
         lastOverlayTokenShown = ctx.last_token;
         setOverlayOpen(true);
       } else {
-        // If suppressed, keep it closed
         const s = getSuppressedToken();
         if (s && s === String(ctx.last_token).trim()) {
           if (isOverlayOpen()) setOverlayOpen(false);
         }
       }
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   function hydrateLastTriggerFromLocalStorage() {
@@ -790,14 +745,12 @@
     } catch {}
   }
 
-  // ---------------- Init ----------------
   captureTokenFromUrl();
   hydrateLastTriggerFromLocalStorage();
   applyFilters();
 
   loadContacts();
 
-  // Poll active alerts + OK events
   tryHydrateContext();
   pollOkLatest();
 

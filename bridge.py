@@ -1,19 +1,3 @@
-# bridge.py
-# Reads JSON events from Arduino over serial.
-# - Sends alert-worthy events to /api/trigger
-# - Sends cancel/dismiss events to /api/resolve (so site can close alert)
-# - Sends "I'm OK" (touch hold 5s) to /api/ok (NOT an active alert)
-#
-# ✅ Fixes included:
-# - Auto-reconnect if the port resets/disconnects
-# - Avoids “Resource busy” by refusing to run if another process holds the port
-# - Dedupe events so you don’t spam Flask/SNS
-# - Lets you override PORT/BAUD/FLASK_BASE/DEVICE_ID via env vars
-#
-# ✅ NEW:
-# - Risk is computed from Arduino-emitted event + prox + distance_cm and sent as "risk"
-# - ok_hold_5s forwarded to /api/ok so frontend can show "I'm OK"
-
 import json
 import os
 import time
@@ -21,7 +5,6 @@ import requests
 import serial
 from serial.serialutil import SerialException
 
-# ---------------- Config ----------------
 PORT = os.getenv("SOUSSAFE_PORT", "/dev/cu.usbmodemB081849824842")
 BAUD = int(os.getenv("SOUSSAFE_BAUD", "9600"))
 
@@ -32,39 +15,31 @@ OK_URL = f"{FLASK_BASE}/api/ok"
 
 DEVICE_ID = os.getenv("SOUSSAFE_DEVICE_ID", "K01")
 
-# Arduino emits many events; only some should create an alert in the web app.
 ALERT_EVENTS = {
     "emergency_timeout",
     "emergency_touch_3tap",
     "timer_done",
 }
 
-# Arduino emits this when the emergency is cancelled.
 DISMISS_EVENTS = {
     "emergency_cancel",
 }
 
-# Arduino emits this for "I'm OK" (touch held 5 seconds while in proximity).
 OK_EVENTS = {
     "ok_hold_5s",
 }
 
-# Optional debug/no-op events
 DEBUG_EVENTS = {
     "emergency_start",
 }
 
-# Dedupe window (seconds)
 DEDUPE_WINDOW_SEC = float(os.getenv("SOUSSAFE_DEDUPE_SEC", "1.5"))
-_last_sent = {}  # key -> timestamp
+_last_sent = {}
 
-# Requests timeout
 HTTP_TIMEOUT = float(os.getenv("SOUSSAFE_HTTP_TIMEOUT", "3.0"))
 
 
-# ---------------- Helpers ----------------
 def parse_bool(v):
-    """Arduino may send True/False, 1/0, or strings."""
     if v is True or v is False:
         return v
     if v is None:
@@ -80,7 +55,6 @@ def parse_bool(v):
 
 
 def map_event_to_trigger(evt: str) -> str:
-    # These should be treated as manual/emergency-type triggers.
     e = (evt or "").strip()
     if e.startswith("emergency"):
         return "manual"
@@ -90,16 +64,8 @@ def map_event_to_trigger(evt: str) -> str:
 
 
 def event_to_risk(event: str, prox, distance_cm) -> int:
-    """
-    Compute risk ONLY from Arduino-emitted data:
-      - event type
-      - prox boolean
-      - distance_cm
-    Output: integer 0..10
-    """
     e = (event or "").strip()
 
-    # Base risk by event (tweak as desired)
     if e == "emergency_timeout":
         r = 10
     elif e == "emergency_touch_3tap":
@@ -107,7 +73,7 @@ def event_to_risk(event: str, prox, distance_cm) -> int:
     elif e == "timer_done":
         r = 6
     else:
-        r = 4  # fallback
+        r = 4
 
     p = parse_bool(prox)
     if p is True:
@@ -142,12 +108,8 @@ def post_json(url: str, payload: dict, label: str):
 
 
 def open_serial() -> serial.Serial:
-    """
-    Open serial port safely. On macOS, /dev/cu.* is typically what you want.
-    If the device disappears/reappears, this may need reconnect.
-    """
     ser = serial.Serial(PORT, BAUD, timeout=1)
-    time.sleep(2)  # Arduino resets on serial open
+    time.sleep(2)
     try:
         ser.reset_input_buffer()
     except Exception:
@@ -168,7 +130,6 @@ def dist_bucket(distance_cm):
         return str(distance_cm)
 
 
-# ---------------- Main ----------------
 def main():
     ser = None
     backoff = 1.0
@@ -208,7 +169,6 @@ def main():
         if not line:
             continue
 
-        # Arduino prints both text + JSON. Only JSON lines start with "{"
         if not line.startswith("{"):
             print("ARDUINO:", line)
             continue
@@ -226,7 +186,6 @@ def main():
         if not event:
             continue
 
-        # -------- dismiss events (CLEAR the active alert) --------
         if event in DISMISS_EVENTS:
             key = f"resolve:{DEVICE_ID}:{event}"
             if dedupe(key):
@@ -243,7 +202,6 @@ def main():
             post_json(RESOLVE_URL, payload, "RESOLVE")
             continue
 
-        # -------- OK events (NOT an active alert; frontend can show "I'm OK") --------
         if event in OK_EVENTS:
             key = f"ok:{DEVICE_ID}:{event}:{dist_bucket(distance_cm)}:{prox}"
             if dedupe(key):
@@ -260,17 +218,14 @@ def main():
             post_json(OK_URL, payload, "OK")
             continue
 
-        # -------- debug/no-op events --------
         if event in DEBUG_EVENTS:
             print(f"IGNORED debug event={event} distance_cm={distance_cm} prox={prox}")
             continue
 
-        # -------- alert events --------
         if event not in ALERT_EVENTS:
             print(f"IGNORED event={event} distance_cm={distance_cm} prox={prox}")
             continue
 
-        # Dedupe alerts by device + event + distance bucket
         key = f"alert:{DEVICE_ID}:{event}:{dist_bucket(distance_cm)}:{prox}"
         if dedupe(key):
             print(f"DEDUPED {key}")
@@ -281,13 +236,13 @@ def main():
         payload = {
             "device": DEVICE_ID,
             "trigger": map_event_to_trigger(event),
-            "risk": risk,                 # ✅ Arduino-side risk truth
+            "risk": risk,
             "distance_cm": distance_cm,
             "audio": None,
             "temp": None,
             "humidity": None,
-            "prox": prox,                 # optional debug
-            "event": event,               # source-of-truth event
+            "prox": prox,
+            "event": event,
         }
 
         print("ALERT POST", payload)
