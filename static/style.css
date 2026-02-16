@@ -1,4 +1,3 @@
-/* static/style.css */
 :root{
   --bg:#0f1115;
   --panel:#141824;
@@ -40,14 +39,12 @@ body{
 
 a{color:inherit}
 
-/* Page wrapper (wider now for “storefront”) */
 .wrap{
   max-width:980px;
   margin:22px auto;
   padding:16px;
 }
 
-/* ---------- Typography helpers ---------- */
 .muted{color:var(--muted)}
 .small{font-size:13px}
 .subtle{color:var(--muted); font-size:13px}
@@ -55,7 +52,6 @@ a{color:inherit}
 .link{color:#b7c4ff}
 .link:hover{text-decoration:underline}
 
-/* ---------- Old header (keep for other pages) ---------- */
 .top{
   display:flex;
   align-items:flex-start;
@@ -71,7 +67,6 @@ a{color:inherit}
   letter-spacing:.2px;
 }
 
-/* Clickable brand (dashboard “secret” toggle) */
 .brand.clickable{
   cursor:pointer;
   user-select:none;
@@ -80,7 +75,6 @@ a{color:inherit}
   color:#cfd8ff;
 }
 
-/* ---------- New storefront top bar ---------- */
 .topbar{
   display:flex;
   align-items:center;
@@ -107,7 +101,6 @@ a{color:inherit}
 
 .topnav{display:flex; gap:10px; align-items:center}
 
-/* ---------- Panels / cards ---------- */
 .card,
 .panel{
   background: rgba(22,26,34,.9);
@@ -133,10 +126,8 @@ a{color:inherit}
   margin-bottom:10px;
 }
 
-/* Hide helper (dashboard alert panel) */
 .is-hidden{display:none !important}
 
-/* ---------- Buttons ---------- */
 .btn-row{display:flex;gap:10px;margin-top:10px}
 
 .btn{
@@ -165,7 +156,6 @@ a{color:inherit}
 }
 .btn.ghost:hover{border-color:var(--border2)}
 
-/* ---------- Chips (filters + existing chip links) ---------- */
 .chip{
   display:inline-flex;
   align-items:center;
@@ -189,7 +179,6 @@ a{color:inherit}
   color: #cfd8ff;
 }
 
-/* ---------- Search row ---------- */
 .searchrow{
   display:flex;
   align-items:center;
@@ -224,7 +213,6 @@ a{color:inherit}
   flex-wrap:wrap;
 }
 
-/* ---------- Product grid (Amazon-like) ---------- */
 .productgrid{
   display:grid;
   grid-template-columns: repeat(3, 1fr);
@@ -238,7 +226,6 @@ a{color:inherit}
   .productgrid{grid-template-columns: 1fr;}
 }
 
-/* Card */
 .productcard{
   display:flex;
   flex-direction:column;
@@ -336,7 +323,6 @@ a{color:inherit}
   color:#b7c4ff;
 }
 
-/* ---------- Your original “grid tiles” (keep for older pages) ---------- */
 .grid{
   display:grid;
   grid-template-columns:1fr 1fr;
@@ -365,7 +351,6 @@ a{color:inherit}
 .tile-title{font-weight:800}
 .tile-sub{color:var(--muted);font-size:13px;margin-top:3px}
 
-/* ---------- Status ---------- */
 .status-row{
   display:grid;
   grid-template-columns:1fr 1fr 1fr;
@@ -423,7 +408,6 @@ a{color:inherit}
   margin-top:2px;
 }
 
-/* ---------- Trusted Contact (new) ---------- */
 .contactpanel{
   margin-top:10px;
   padding:14px;
@@ -462,7 +446,6 @@ a{color:inherit}
   transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
 }
 
-/* remove default select look */
 .field select{
   appearance:none;
   -webkit-appearance:none;
@@ -503,7 +486,6 @@ a{color:inherit}
   padding-left:2px;
 }
 
-/* ---------- Steps / recipe page ---------- */
 .steps{
   padding-left:0;
   margin:0;
@@ -541,7 +523,6 @@ a{color:inherit}
 .steps.compact .step{padding:8px 8px}
 .steps.compact .step-num{width:32px;height:32px}
 
-/* ---------- Timer block ---------- */
 .timer{
   display:flex;
   align-items:center;
@@ -558,7 +539,6 @@ a{color:inherit}
   background: rgba(15,17,21,.55);
 }
 
-/* ---------- Misc ---------- */
 .back{
   display:inline-block;
   margin-bottom:8px;
@@ -578,7 +558,6 @@ a{color:inherit}
   line-height:1.35;
 }
 
-/* Dashboard events */
 .events{display:flex;flex-direction:column;gap:10px}
 
 .event{
@@ -630,17 +609,10 @@ a{color:inherit}
 
 .tip p{margin:8px 0}
 
-/* ==========================================================
-   Alert Overlay (matches home.html class names)
-   home.html uses: alertoverlay, alertmodal, alertbadge,
-   alerttitle, alertsubtle, alertgrid, alertstat, alertactions,
-   alertfoot
-   ========================================================== */
-
 .alertoverlay{
   position:fixed;
   inset:0;
-  display:none; /* JS toggles to grid */
+  display:none;
   place-items:center;
   background: rgba(0,0,0,.55);
   backdrop-filter: blur(6px);
@@ -697,8 +669,6 @@ a{color:inherit}
   border:1px solid var(--border);
   border-radius:14px;
   padding:10px;
-
-
   background: rgba(15,17,21,.55);
 }
 
